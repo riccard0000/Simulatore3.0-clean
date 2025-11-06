@@ -64,9 +64,8 @@ async function initCalculator() {
         buildingCategorySelect.innerHTML = '<option value="" disabled selected>Seleziona prima il soggetto...</option>';
     }
 
-    // La selezione della modalità è stata rimossa dall'interfaccia. Le modalità
-    // sono ancora mantenute nei dati per retrocompatibilità ma non vengono
-    // presentate all'utente.
+    // La selezione della modalità è stata rimossa dall'interfaccia; le modalità
+    // restano nei dati ma non vengono mostrate all'utente.
 
     function updateOperatorType() {
         // Calcola l'operatorType interno dalla matrice
@@ -104,8 +103,7 @@ async function initCalculator() {
         }
     }
 
-    // updateImplementationModeOptions() rimosso perché l'utente non seleziona più
-    // la modalità nella UI.
+    // updateImplementationModeOptions() rimosso per via dell'eliminazione della UI
 
     // Funzione per aggiungere una riga alla tabella dinamica
     function addTableRow(interventionId, inputId, columns, tbody) {
@@ -454,8 +452,8 @@ async function initCalculator() {
             // Filtra categorie immobile ammissibili per questo soggetto
             updateBuildingCategoryOptions();
             
-            // Rimuovi i campi specifici se cambio soggetto (potrebbero non essere più pertinenti)
-            // (step 3 rimosso dall'interfaccia)
+            // Step 3 (modalità) rimosso dall'interfaccia; manteniamo solo i campi
+            // specifici del soggetto
             
             // Mostra campi specifici del soggetto (es. popolazione comune per PA)
             renderSubjectSpecificFields();
@@ -464,7 +462,7 @@ async function initCalculator() {
             state.selectedBuilding = '';
             state.selectedOperator = '';
             buildingCategorySelect.value = '';
-            implementationModeGroup.style.display = 'none';
+            // implementationModeGroup removed from UI
             renderInterventions();
             // populatePremiums(); // Rimosso: sezione premialità nascosta
         });
@@ -476,16 +474,14 @@ async function initCalculator() {
             // Calcola operatorType dalla matrice
             updateOperatorType();
             
-            // Mostra step 3 (se ci sono opzioni)
-            // step 3 (modalità) rimosso dall'interfaccia
+            // Step 3 (modalità) rimosso dall'interfaccia
             
             // Aggiorna interventi e premialità
             renderInterventions();
             // populatePremiums(); // Rimosso: sezione premialità nascosta
         });
 
-        // Step 3: Modalità di realizzazione (opzionale, solo informativo)
-        // implementationModeSelect listener removed: UI step 3 eliminated
+        // Step 3 removed from UI: no listener
 
         interventionsList.addEventListener('change', (e) => {
             if (e.target.name === 'intervention') {
@@ -788,13 +784,97 @@ async function initCalculator() {
     }
 
     function renderImplementationModeFields() {
-        // Step 3 UI removed: nothing to render here unless the implementation-mode
-        // group exists in the DOM (backwards compatibility). If absent, skip.
+        // If the implementation-mode group isn't present in the DOM (we removed
+        // step 3 from the UI), do nothing. This keeps backward compatibility
+        // for any code that still calls this function.
         const modeGroup = document.getElementById('implementation-mode-group');
         if (!modeGroup) {
             console.log('renderImplementationModeFields: implementation-mode-group not present, skipping');
             return;
         }
+
+        // Otherwise proceed with the original behavior (if present)
+        const fieldKey = `${state.selectedSubject}_${state.selectedMode}`;
+        const modeFields = calculatorData.implementationModeFields?.[fieldKey];
+
+        // Rimuovi contenitore esistente se presente
+        const existingContainer = document.getElementById('implementation-mode-fields');
+        if (existingContainer) existingContainer.remove();
+
+        if (!modeFields || modeFields.length === 0) return;
+
+        const fieldsContainer = document.createElement('div');
+        fieldsContainer.id = 'implementation-mode-fields';
+        fieldsContainer.className = 'form-group';
+        fieldsContainer.style.marginTop = '20px';
+        fieldsContainer.style.padding = '16px';
+        fieldsContainer.style.background = '#fff3e0';
+        fieldsContainer.style.borderRadius = '8px';
+        fieldsContainer.style.border = '2px solid #ff9800';
+
+        modeGroup.parentNode.insertBefore(fieldsContainer, modeGroup.nextSibling);
+        fieldsContainer.innerHTML = '<h4 style="margin: 0 0 16px 0; color: #e65100;">📋 Verifica requisiti maggiorazione</h4>';
+
+        modeFields.forEach(field => {
+            if (field.visible_if) {
+                const conditionField = field.visible_if.field;
+                const conditionValue = field.visible_if.value;
+                const currentValue = state.subjectSpecificData[conditionField];
+                if (currentValue !== conditionValue) return;
+            }
+
+            const fieldDiv = document.createElement('div');
+            fieldDiv.className = 'form-group';
+            fieldDiv.style.marginBottom = '12px';
+            fieldDiv.id = `field-wrapper-${field.id}`;
+
+            if (field.type === 'checkbox') {
+                const checkboxWrapper = document.createElement('div');
+                checkboxWrapper.style.display = 'flex';
+                checkboxWrapper.style.alignItems = 'flex-start';
+                checkboxWrapper.style.gap = '8px';
+
+                const input = document.createElement('input');
+                input.type = 'checkbox';
+                input.id = `mode-field-${field.id}`;
+                input.name = field.id;
+                input.checked = state.subjectSpecificData[field.id] || false;
+                input.style.marginTop = '4px';
+
+                input.addEventListener('change', (e) => {
+                    state.subjectSpecificData[field.id] = e.target.checked;
+                    if (field.shows && field.shows.length > 0) renderImplementationModeFields();
+                });
+
+                const labelWrapper = document.createElement('div');
+                labelWrapper.style.flex = '1';
+
+                const label = document.createElement('label');
+                label.htmlFor = input.id;
+                label.textContent = field.name;
+                label.style.cursor = 'pointer';
+                label.style.fontWeight = 'bold';
+                label.style.display = 'block';
+                labelWrapper.appendChild(label);
+
+                if (field.help) {
+                    const help = document.createElement('small');
+                    help.className = 'info-text';
+                    help.textContent = field.help;
+                    help.style.display = 'block';
+                    help.style.marginTop = '4px';
+                    help.style.color = '#666';
+                    help.style.fontSize = '0.9em';
+                    labelWrapper.appendChild(help);
+                }
+
+                checkboxWrapper.appendChild(input);
+                checkboxWrapper.appendChild(labelWrapper);
+                fieldDiv.appendChild(checkboxWrapper);
+            }
+
+            fieldsContainer.appendChild(fieldDiv);
+        });
     }
 
     // Helper per verificare se un campo deve essere visibile
