@@ -61,7 +61,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     id: 'tertiary_generic',
                     name: 'Terziario generico',
                     description: 'Uffici, negozi, attività commerciali',
-                    allowedSubjects: ['pa', 'ets_non_economic', 'person', 'sme', 'large_company', 'ets_economic'],
+                    allowedSubjects: ['pa', 'ets_non_economic', 'person', 'small_company', 'large_company', 'ets_economic'],
                     art48ter: false
                 },
                 {
@@ -80,14 +80,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     art48ter: true,
                     note: 'Art. 48-ter: incentivo al 100% della spesa ammissibile'
                 },
-                {
-                    id: 'tertiary_prison',
-                    name: 'Carcere',
-                    description: 'Istituto penitenziario',
-                    allowedSubjects: ['pa'],
-                    art48ter: true,
-                    note: 'Art. 48-ter: incentivo al 100% della spesa ammissibile'
-                }
+                // 'tertiary_prison' rimosso: non più mostrato nelle categorie catastali
             ]
         }
     ],
@@ -98,20 +91,20 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             id: 'direct',
             name: 'Intervento diretto',
             description: 'Il soggetto ammesso realizza direttamente l\'intervento e ne sostiene le spese.',
-            allowedSubjects: ['pa', 'ets_non_economic', 'person', 'sme', 'large_company', 'ets_economic'] // Tutti
+            allowedSubjects: ['pa', 'ets_non_economic', 'person', 'small_company', 'large_company', 'ets_economic'] // Tutti
         },
         {
             id: 'esco',
             name: 'Tramite ESCO/Contratto EPC',
             description: 'Energy Service Company che sostiene le spese per conto del soggetto ammesso.',
-            allowedSubjects: ['pa', 'ets_non_economic', 'person', 'sme', 'large_company', 'ets_economic'], // Tutti, ma con condizioni
+            allowedSubjects: ['pa', 'ets_non_economic', 'person', 'small_company', 'large_company', 'ets_economic'], // Tutti, ma con condizioni
             note: 'Per i privati in ambito RESIDENZIALE, è ammessa solo per interventi Titolo III con P > 70 kW o S > 20 m². Altrimenti, si usa il mandato all\'incasso.'
         },
         {
             id: 'energy_community',
             name: 'Tramite Comunità Energetica',
             description: 'Configurazione di autoconsumo collettivo o comunità energetica rinnovabile (CER).',
-            allowedSubjects: ['pa', 'ets_non_economic', 'person', 'sme', 'large_company', 'ets_economic'] // Tutti
+            allowedSubjects: ['pa', 'ets_non_economic', 'person', 'small_company', 'large_company', 'ets_economic'] // Tutti
         },
         {
             id: 'ppp',
@@ -151,13 +144,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             allowedInterventions: 'all_titolo2_and_3',
             art48ter: true
         },
-        'pa_tertiary_prison': {
-            operatorTypeId: 'pa',
-            maxIncentiveRate: 1.0,
-            defaultRate: 1.0, // 100% per Art. 48-ter
-            allowedInterventions: 'all_titolo2_and_3',
-            art48ter: true
-        },
+        // 'pa_tertiary_prison' removed (carceri non mostrate come sottocategoria)
         'pa_residential': {
             operatorTypeId: 'pa',
             maxIncentiveRate: 1.0,
@@ -552,30 +539,9 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     { value: 'parete_ventilata', label: 'iii. Parete perimetrale - Parete ventilata', cmax: 250 }
                 ];
                 
-                // Determina la percentuale base
-                const isArt48ter = contextData?.buildingSubcategory && 
-                                  ['tertiary_school', 'tertiary_hospital', 'tertiary_prison'].includes(contextData.buildingSubcategory);
-                
-                // Piccoli comuni < 15.000 abitanti
-                const isPiccoloComune = contextData?.is_comune === true && 
-                                       contextData?.is_edificio_comunale === true &&
-                                       contextData?.is_piccolo_comune === true &&
-                                       contextData?.subjectType === 'pa' &&
-                                       contextData?.implementationMode === 'direct';
-                
-                let percentuale = 0.40; // 40% base
-                
-                // PRIORITÀ: Art. 48-ter e piccoli comuni hanno precedenza (100%)
-                if (isArt48ter || isPiccoloComune) {
-                    percentuale = 1.0; // 100% per edifici pubblici speciali o piccoli comuni
-                } else if (operatorType === 'pa') {
-                    percentuale = 0.65; // 65% per PA generiche
-                } else if (zona_climatica === 'E' || zona_climatica === 'F') {
-                    percentuale = 0.50; // 50% per zone E/F (soggetti privati)
-                }
-                
-                // Premio UE (+10%)
-                const ueMultiplier = params?.premiums?.['prodotti-ue'] ? 1.10 : 1.0;
+                // Determina la percentuale usando la funzione centralizzata
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'isolamento-opache');
+                const percentuale = det.p;
                 
                 // Calcola l'incentivo totale sommando tutte le righe
                 let incentivoTotale = 0;
@@ -595,9 +561,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     // Applica il massimale
                     const costoEffettivo = Math.min(costo_specifico, cmax);
                     
-                    // Calcola incentivo per questa riga
+                    // Calcola incentivo per questa riga (premio UE già incluso come modifica della percentuale)
                     let incentivoRiga = percentuale * costoEffettivo * superficie;
-                    incentivoRiga *= ueMultiplier;
                     
                     incentivoTotale += incentivoRiga;
                     
@@ -613,6 +578,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             },
             explain: (params, operatorType, contextData) => {
                 const { righe_opache, zona_climatica } = params;
+                    // 'tertiary_prison' rimosso: non più mostrato nelle categorie catastali
+                    // 'tertiary_prison' removed
                 
                 if (!righe_opache || !Array.isArray(righe_opache) || righe_opache.length === 0) {
                     return {
@@ -635,48 +602,16 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     { value: 'parete_ventilata', label: 'iii. Parete perimetrale - Parete ventilata', cmax: 250 }
                 ];
                 
-                // Determina percentuale
-                const isArt48ter = contextData?.buildingSubcategory && 
-                                  ['tertiary_school', 'tertiary_hospital', 'tertiary_prison'].includes(contextData.buildingSubcategory);
-                
-                // Piccoli comuni < 15.000 abitanti
-                const isPiccoloComune = contextData?.is_comune === true && 
-                                       contextData?.is_edificio_comunale === true &&
-                                       contextData?.is_piccolo_comune === true &&
-                                       contextData?.subjectType === 'pa' &&
-                                       contextData?.implementationMode === 'direct';
-                
-                let percentuale = 0.40;
-                let percentualeDesc = '40% (base)';
-                
-                // PRIORITÀ: Art. 48-ter e piccoli comuni hanno precedenza (100%)
-                if (isArt48ter) {
-                    percentuale = 1.0;
-                    const buildingNames = {
-                        'tertiary_school': 'scuole',
-                        'tertiary_hospital': 'ospedali',
-                        'tertiary_prison': 'carceri'
-                    };
-                    const buildingType = buildingNames[contextData.buildingSubcategory] || 'edifici speciali';
-                    percentualeDesc = `100% (Art. 48-ter: ${buildingType})`;
-                } else if (isPiccoloComune) {
-                    percentuale = 1.0;
-                    percentualeDesc = '100% (Comune < 15.000 abitanti)';
-                } else if (operatorType === 'pa') {
-                    percentuale = 0.65;
-                    percentualeDesc = '65% (PA/ETS non economici)';
-                } else if (zona_climatica === 'E' || zona_climatica === 'F') {
-                    percentuale = 0.50;
-                    percentualeDesc = `50% (zona climatica ${zona_climatica})`;
-                }
-                
-                const ue = params?.premiums?.['prodotti-ue'] ? 1.10 : 1.0;
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'isolamento-opache');
+                const percentuale = det.p;
+                const percentualeDesc = det.pDesc;
                 const steps = [];
                 let incentivoTotale = 0;
                 
                 steps.push(`Zona climatica: ${zona_climatica}`);
                 steps.push(`Percentuale: ${percentualeDesc}`);
-                steps.push(ue > 1 ? `Premio UE: +10%` : `Premio UE: non applicato`);
+                const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
+                steps.push(ueSelected ? `Premio UE: +10% (incluso nella percentuale)` : `Premio UE: non applicato`);
                 steps.push(`---`);
                 
                 righe_opache.forEach((riga, index) => {
@@ -695,7 +630,10 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     const costoEffettivo = Math.min(costo_specifico, cmax);
                     const superaMassimale = costo_specifico > cmax;
                     
-                    let incentivoRiga = percentuale * costoEffettivo * superficie * ue;
+                    // Il premio UE è già stato integrato nella percentuale (det.p), quindi
+                    // non moltiplichiamo nuovamente per 1.10. Calcoliamo l'incentivo sulla base
+                    // della percentuale già restituita.
+                    let incentivoRiga = percentuale * costoEffettivo * superficie;
                     incentivoTotale += incentivoRiga;
                     
                     steps.push(`Riga ${index + 1}: ${tipologiaLabel}`);
@@ -706,7 +644,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         ? `  ⚠️  C supera Cmax! Uso Cmax=${cmax} €/m²` 
                         : `  ✓ C (${costo_specifico.toFixed(2)}) ≤ Cmax (${cmax})`
                     );
-                    steps.push(`  Incentivo riga = ${percentuale.toFixed(2)} × ${costoEffettivo.toFixed(2)} × ${superficie.toFixed(2)}${ue > 1 ? ' × 1.10' : ''} = ${incentivoRiga.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
+                    steps.push(`  Incentivo riga = ${percentuale.toFixed(2)} × ${costoEffettivo.toFixed(2)} × ${superficie.toFixed(2)} = ${incentivoRiga.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
+                    steps.push(ueSelected ? `  Premio Prodotti UE: incluso nella percentuale (${percentuale.toFixed(2)})` : `  Premio Prodotti UE: non applicato`);
                     steps.push(`---`);
                 });
                 
@@ -718,13 +657,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 
                 return {
                     result: finale,
-                    formula: `Itot = Σ [p × min(Ci, Cmax,i) × Sint,i]${ue > 1 ? ' × 1.10 (UE)' : ''}`,
+                    formula: `Itot = Σ [p × min(Ci, Cmax,i) × Sint,i]${ueSelected ? ' (Prodotti UE inclusi nella percentuale)' : ''}`,
                     variables: {
                         NumeroRighe: righe_opache.length,
                         p: percentuale,
                         pDesc: percentualeDesc,
                         ZonaClimatica: zona_climatica,
-                        UE: ue > 1,
+                        UE: ueSelected,
                         Imas: imas
                     },
                     steps
@@ -759,46 +698,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const cmaxInfissi = (zona_climatica === 'D' || zona_climatica === 'E' || zona_climatica === 'F') ? 800 : 700;
                 const costoEffettivo = Math.min(costo_specifico, cmaxInfissi);
                 
-                // Determina la percentuale base
-                const isArt48ter = contextData?.buildingSubcategory && 
-                                  ['tertiary_school', 'tertiary_hospital', 'tertiary_prison'].includes(contextData.buildingSubcategory);
-                
-                // Piccoli comuni < 15.000 abitanti
-                const isPiccoloComune = contextData?.is_comune === true && 
-                                       contextData?.is_edificio_comunale === true &&
-                                       contextData?.is_piccolo_comune === true &&
-                                       contextData?.subjectType === 'pa' &&
-                                       contextData?.implementationMode === 'direct';
-                
-                // Verifica multi-intervento (55% per 1.A/1.B + 2.A/2.B/2.C/2.E)
-                const isMultiIntervento = contextData?.multiInterventionBonus === true;
-                
-                let percentuale = 0.40; // 40% base
-                
-                // PRIORITÀ: Art. 48-ter e piccoli comuni hanno precedenza (100%)
-                if (isArt48ter || isPiccoloComune) {
-                    percentuale = 1.0; // 100% per edifici pubblici speciali o piccoli comuni
-                } else if (operatorType === 'pa') {
-                    percentuale = 0.65; // 65% per PA generiche
-                } else if (isMultiIntervento) {
-                    percentuale = 0.55; // 55% per multi-intervento (solo per 1.A/1.B)
-                } else if (zona_climatica === 'E' || zona_climatica === 'F') {
-                    percentuale = 0.50; // 50% per zone E/F (soggetti privati)
-                }
-                
+                // Determina la percentuale usando la funzione centralizzata
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'sostituzione-infissi');
+                const percentuale = det.p;
+
                 let incentivo = percentuale * costoEffettivo * superficie;
-                
-                // Premio UE: mai superare il 100% anche con UE
-                const ueMultiplier = params?.premiums?.['prodotti-ue'] ? 1.10 : 1.0;
-                if (ueMultiplier > 1.0 && percentuale >= 1.0) {
-                    // Se già al 100%, non applicare UE
-                    incentivo = 1.0 * costoEffettivo * superficie;
-                } else {
-                    incentivo *= ueMultiplier;
-                    // Limite massimo anche dopo UE
-                    const limiteMax = 1.0 * costoEffettivo * superficie;
-                    incentivo = Math.min(incentivo, limiteMax);
-                }
+                // Limite: non superare il 100% della spesa per riga (già garantito da percentuale <= 1.0)
+                incentivo = Math.min(incentivo, 1.0 * costoEffettivo * superficie);
                 
                 // Imas = 500.000 €
                 const tettoMassimo = 500000;
@@ -811,56 +717,15 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const cmaxInfissi = (zona_climatica === 'D' || zona_climatica === 'E' || zona_climatica === 'F') ? 800 : 700;
                 const costoEffettivo = Math.min(costo_specifico || 0, cmaxInfissi);
                 
-                // Determina percentuale
-                const isArt48ter = contextData?.buildingSubcategory && 
-                                  ['tertiary_school', 'tertiary_hospital', 'tertiary_prison'].includes(contextData.buildingSubcategory);
-                
-                const isPiccoloComune = contextData?.is_comune === true && 
-                                       contextData?.is_edificio_comunale === true &&
-                                       contextData?.is_piccolo_comune === true &&
-                                       contextData?.subjectType === 'pa' &&
-                                       contextData?.implementationMode === 'direct';
-                
-                const isMultiIntervento = contextData?.multiInterventionBonus === true;
-                
-                let percentuale = 0.40;
-                let percentualeDesc = '40% (base)';
-                
-                // PRIORITÀ: Art. 48-ter e piccoli comuni hanno precedenza (100%)
-                if (isArt48ter) {
-                    percentuale = 1.0;
-                    const buildingNames = {
-                        'tertiary_school': 'scuole',
-                        'tertiary_hospital': 'ospedali',
-                        'tertiary_prison': 'carceri'
-                    };
-                    const buildingType = buildingNames[contextData.buildingSubcategory] || 'edifici speciali';
-                    percentualeDesc = `100% (Art. 48-ter: ${buildingType})`;
-                } else if (isPiccoloComune) {
-                    percentuale = 1.0;
-                    percentualeDesc = '100% (Comune < 15.000 abitanti)';
-                } else if (operatorType === 'pa') {
-                    percentuale = 0.65;
-                    percentualeDesc = '65% (PA/ETS non economici)';
-                } else if (isMultiIntervento) {
-                    percentuale = 0.55;
-                    percentualeDesc = '55% (multi-intervento 1.A/1.B + 2.A/2.B/2.C/2.E)';
-                } else if (zona_climatica === 'E' || zona_climatica === 'F') {
-                    percentuale = 0.50;
-                    percentualeDesc = `50% (zona climatica ${zona_climatica})`;
-                }
-                
-                const ue = params?.premiums?.['prodotti-ue'] ? 1.10 : 1.0;
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'sostituzione-infissi');
+                const percentuale = det.p;
+                const percentualeDesc = det.pDesc;
+
                 const base = percentuale * costoEffettivo * (superficie || 0);
-                
-                let conUE = base;
-                let ueApplicata = false;
-                if (ue > 1.0 && percentuale < 1.0) {
-                    conUE = base * ue;
-                    const limiteMax = 1.0 * costoEffettivo * (superficie || 0);
-                    conUE = Math.min(conUE, limiteMax);
-                    ueApplicata = true;
-                }
+                // UE viene gestito come incremento della percentuale nella funzione centrale; segnaliamo solo se richiesto
+                const ueRequested = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
+                const ueApplicata = ueRequested && percentuale < 1.0;
+                const conUE = base; // il valore finale è già rappresentato da base (p ha già incorporato UE)
                 
                 const imas = 500000;
                 const finale = Math.min(conUE, imas);
@@ -892,11 +757,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         `Ceff = min(${(costo_specifico||0).toFixed(2)}, ${cmaxInfissi}) = ${costoEffettivo.toFixed(2)} €/m²`,
                         `Base = ${percentuale.toFixed(2)} × ${costoEffettivo.toFixed(2)} × ${(superficie||0).toFixed(2)} = ${base.toFixed(2)} €`,
                         ueApplicata 
-                            ? `UE: ${base.toFixed(2)} × 1.10 = ${conUE.toFixed(2)} € (max 100%)` 
-                            : ue > 1.0 && percentuale >= 1.0
+                            ? `UE: premio UE applicato e incluso nella percentuale` 
+                            : (ueRequested && percentuale >= 1.0)
                                 ? `UE: non applicata (già al 100%)`
                                 : `UE: non applicata`,
-                        `Finale = min(${conUE.toFixed(2)}, ${imas.toLocaleString('it-IT')}) = ${finale.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`
+                        `Finale = min(${base.toFixed(2)}, ${imas.toLocaleString('it-IT')}) = ${finale.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`
                     ]
                 };
             }
@@ -949,13 +814,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     help: 'Inserisci una riga per ogni tipologia di schermatura solare. Puoi aggiungere più tipologie.'
                 }
             ],
-            calculate: (params, operatorType) => {
+            calculate: (params, operatorType, contextData) => {
                 const { righe_schermature } = params;
                 if (!righe_schermature || !Array.isArray(righe_schermature) || righe_schermature.length === 0) return 0;
 
                 let incentivoTotale = 0;
-                const percentuale = operatorType === 'pa' ? 1.0 : 0.40;
-                const ueMultiplier = params?.premiums?.['prodotti-ue'] ? 1.10 : 1.0;
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'schermature-solari');
+                const percentuale = det.p;
 
                 righe_schermature.forEach(riga => {
                     const { tipologia_schermatura, superficie, costo_totale } = riga;
@@ -974,14 +839,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     const costoEffettivo = Math.min(costo_specifico, tipologiaData.cmax);
                     
                     let incentivoRiga = percentuale * costoEffettivo * superficie;
-                    incentivoRiga *= ueMultiplier;
                     
                     incentivoTotale += Math.min(incentivoRiga, tipologiaData.imax);
                 });
                 
                 return incentivoTotale;
             },
-            explain: (params, operatorType) => {
+            explain: (params, operatorType, contextData) => {
                 const { righe_schermature } = params;
                 if (!righe_schermature || !Array.isArray(righe_schermature) || righe_schermature.length === 0) {
                     return {
@@ -999,13 +863,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     { value: 'Filtrazione solare selettiva riflettente', label: 'Filtrazione solare selettiva riflettente', cmax: 80, imax: 30000 }
                 ];
 
-                const p = operatorType === 'pa' ? 1.0 : 0.40;
-                const ue = params?.premiums?.['prodotti-ue'] ? 1.10 : 1.0;
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'schermature-solari');
+                const p = det.p;
+                const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
                 const steps = [];
                 let incentivoTotale = 0;
-
-                steps.push(`Percentuale: ${p.toFixed(2)}`);
-                steps.push(ue > 1 ? `Premio UE: +10%` : `Premio UE: non applicato`);
+                steps.push(`Percentuale: ${Math.round(p*100)}%`);
+                steps.push(ueSelected ? `Premio UE: +10% (incluso nella percentuale)` : `Premio UE: non applicato`);
                 steps.push(`---`);
 
                 righe_schermature.forEach((riga, index) => {
@@ -1026,7 +890,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     const costoEffettivo = Math.min(costo_specifico, cmax);
                     const superaMassimaleC = costo_specifico > cmax;
 
-                    let incentivoRigaBase = p * costoEffettivo * superficie * ue;
+                    let incentivoRigaBase = p * costoEffettivo * superficie;
                     let incentivoRigaFinale = Math.min(incentivoRigaBase, imax);
                     incentivoTotale += incentivoRigaFinale;
 
@@ -1038,7 +902,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         ? `  ⚠️  Costo specifico (${costo_specifico.toFixed(2)} €/m²) supera Cmax (${cmax} €/m²)! Uso Cmax.` 
                         : `  ✓ Costo specifico (${costo_specifico.toFixed(2)}) ≤ Cmax (${cmax})`
                     );
-                    steps.push(`  Incentivo riga base = ${p.toFixed(2)} × ${costoEffettivo.toFixed(2)} × ${superficie.toFixed(2)}${ue > 1 ? ' × 1.10' : ''} = ${incentivoRigaBase.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
+                    steps.push(`  Incentivo riga base = ${p.toFixed(2)} × ${costoEffettivo.toFixed(2)} × ${superficie.toFixed(2)} = ${incentivoRigaBase.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
                     steps.push(`  Incentivo riga finale = min(${incentivoRigaBase.toLocaleString('it-IT', {minimumFractionDigits: 2})}, ${imax.toLocaleString('it-IT')}) = ${incentivoRigaFinale.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
                     steps.push(`---`);
                 });
@@ -1049,7 +913,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     variables: {
                         NumeroRighe: righe_schermature.length,
                         p: p,
-                        UE: ue > 1,
+                        UE: ueSelected,
                     },
                     steps
                 };
@@ -1075,7 +939,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 },
                 { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] }
             ],
-            calculate: (params, operatorType) => {
+            calculate: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico, zona_climatica } = params;
                 if (!superficie || !costo_specifico) return 0;
                 
@@ -1090,36 +954,33 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 }
                 
                 const costoEffettivo = Math.min(costo_specifico, cmax);
-                const percentuale = operatorType === 'pa' ? 1.0 : 0.65;
-                
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'nzeb');
+                const percentuale = det.p;
+
                 let incentivo = percentuale * costoEffettivo * superficie;
-                
-                // Premio UE (+10%)
-                const ueMultiplier = params?.premiums?.['prodotti-ue'] ? 1.10 : 1.0;
-                incentivo *= ueMultiplier;
                 
                 return Math.min(incentivo, imax);
             },
-            explain: (params, operatorType) => {
+            explain: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico, zona_climatica } = params;
                 let cmax, imax;
                 if (['A','B','C'].includes(zona_climatica)) { cmax=1000; imax=2500000; } else { cmax=1300; imax=3000000; }
-                const p = operatorType === 'pa' ? 1.0 : 0.65;
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'nzeb');
+                const p = det.p;
                 const Ceff = Math.min(costo_specifico||0, cmax);
                 const base = p * Ceff * (superficie||0);
-                const ue = params?.premiums?.['prodotti-ue'] ? 1.10 : 1.0;
-                const conUE = base * ue;
-                const finale = Math.min(conUE, imax);
+                const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
+                const finale = Math.min(base, imax);
                 return {
                     result: finale,
-                    formula: `Itot = p × min(C, ${cmax}) × Sed${ue>1?' × 1.10 (prodotti UE)':''}; Imas=${imax.toLocaleString('it-IT')}€`,
-                    variables: { p, C: costo_specifico||0, Ceff, Sed: superficie||0, UE: ue>1, Imas: imax },
+                    formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected?' (premio UE incluso nella percentuale)':''}; Imas=${imax.toLocaleString('it-IT')}€`,
+                    variables: { p, C: costo_specifico||0, Ceff, Sed: superficie||0, UE: ueSelected, Imas: imax },
                     steps: [
                         `p=${p.toFixed(2)}`,
                         `Ceff=min(${(costo_specifico||0).toFixed(2)}, ${cmax})=${Ceff.toFixed(2)}`,
                         `Base=${p.toFixed(2)}×${Ceff.toFixed(2)}×${(superficie||0).toFixed(2)}=${base.toFixed(2)}`,
-                        ue>1?`UE: ${base.toFixed(2)}×1.10=${conUE.toFixed(2)}`:`UE: non applicata`,
-                        `Finale=min(${conUE.toFixed(2)}, ${imax})=${finale.toFixed(2)}`
+                        ueSelected?`UE: premio UE applicato e incluso nella percentuale`:`UE: non applicata`,
+                        `Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`
                     ]
                 };
             }
@@ -1170,13 +1031,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     help: 'Inserisci una riga per ogni tipologia di lampada. Puoi aggiungere più tipologie.'
                 }
             ],
-            calculate: (params, operatorType) => {
+            calculate: (params, operatorType, contextData) => {
                 const { righe_illuminazione } = params;
                 if (!righe_illuminazione || !Array.isArray(righe_illuminazione) || righe_illuminazione.length === 0) return 0;
 
                 let incentivoTotale = 0;
-                const percentuale = operatorType === 'pa' ? 1.0 : 0.40;
-                const ueMultiplier = params?.premiums?.['prodotti-ue'] ? 1.10 : 1.0;
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'illuminazione-led');
+                const percentuale = det.p;
 
                 righe_illuminazione.forEach(riga => {
                     const { tipo_lampada, superficie, costo_totale } = riga;
@@ -1193,14 +1054,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     const costoEffettivo = Math.min(costo_specifico, tipologiaData.cmax);
                     
                     let incentivoRiga = percentuale * costoEffettivo * superficie;
-                    incentivoRiga *= ueMultiplier;
                     
                     incentivoTotale += Math.min(incentivoRiga, tipologiaData.imax);
                 });
                 
                 return incentivoTotale;
             },
-            explain: (params, operatorType) => {
+            explain: (params, operatorType, contextData) => {
                 const { righe_illuminazione } = params;
                 if (!righe_illuminazione || !Array.isArray(righe_illuminazione) || righe_illuminazione.length === 0) {
                     return {
@@ -1216,13 +1076,14 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     { value: 'LED', label: 'LED', cmax: 35, imax: 140000 }
                 ];
 
-                const p = operatorType === 'pa' ? 1.0 : 0.40;
-                const ue = params?.premiums?.['prodotti-ue'] ? 1.10 : 1.0;
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'illuminazione-led');
+                const p = det.p;
+                const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
                 const steps = [];
                 let incentivoTotale = 0;
 
                 steps.push(`Percentuale: ${p.toFixed(2)}`);
-                steps.push(ue > 1 ? `Premio UE: +10%` : `Premio UE: non applicato`);
+                steps.push(ueSelected ? `Premio UE: +10% (incluso nella percentuale)` : `Premio UE: non applicato`);
                 steps.push(`---`);
 
                 righe_illuminazione.forEach((riga, index) => {
@@ -1243,7 +1104,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     const costoEffettivo = Math.min(costo_specifico, cmax);
                     const superaMassimaleC = costo_specifico > cmax;
 
-                    let incentivoRigaBase = p * costoEffettivo * superficie * ue;
+                    let incentivoRigaBase = p * costoEffettivo * superficie;
                     let incentivoRigaFinale = Math.min(incentivoRigaBase, imax);
                     incentivoTotale += incentivoRigaFinale;
 
@@ -1255,7 +1116,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         ? `  ⚠️  Costo specifico (${costo_specifico.toFixed(2)} €/m²) supera Cmax (${cmax} €/m²)! Uso Cmax.` 
                         : `  ✓ Costo specifico (${costo_specifico.toFixed(2)}) ≤ Cmax (${cmax})`
                     );
-                    steps.push(`  Incentivo riga base = ${p.toFixed(2)} × ${costoEffettivo.toFixed(2)} × ${superficie.toFixed(2)}${ue > 1 ? ' × 1.10' : ''} = ${incentivoRigaBase.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
+                    steps.push(`  Incentivo riga base = ${p.toFixed(2)} × ${costoEffettivo.toFixed(2)} × ${superficie.toFixed(2)} = ${incentivoRigaBase.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
                     steps.push(`  Incentivo riga finale = min(${incentivoRigaBase.toLocaleString('it-IT', {minimumFractionDigits: 2})}, ${imax.toLocaleString('it-IT')}) = ${incentivoRigaFinale.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
                     steps.push(`---`);
                 });
@@ -1266,7 +1127,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     variables: {
                         NumeroRighe: righe_illuminazione.length,
                         p: p,
-                        UE: ue > 1,
+                        UE: ueSelected,
                     },
                     steps
                 };
@@ -1283,7 +1144,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0 },
                 { id: 'costo_specifico', name: 'Costo specifico C (€/m²)', type: 'computed', compute: (params) => params.superficie > 0 ? (params.costo_totale / params.superficie).toFixed(2) : '0.00' }
             ],
-            calculate: (params, operatorType) => {
+            calculate: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico } = params;
                 if (!superficie || !costo_specifico) return 0;
                 
@@ -1292,24 +1153,34 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const imax = 100000; // €
                 
                 const costoEffettivo = Math.min(costo_specifico, cmax);
-                const percentuale = operatorType === 'pa' ? 1.0 : 0.40;
-                
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'building-automation');
+                const percentuale = det.p;
+
                 let incentivo = percentuale * costoEffettivo * superficie;
-                
-                // Premio UE (+10%)
-                const ueMultiplier = params?.premiums?.['prodotti-ue'] ? 1.10 : 1.0;
-                incentivo *= ueMultiplier;
                 
                 return Math.min(incentivo, imax);
             },
-            explain: (params, operatorType) => {
+            explain: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico } = params;
-                const cmax=60, imax=100000, p= operatorType==='pa'?1.0:0.40;
-                const Ceff=Math.min(costo_specifico||0,cmax);
-                const base=p*Ceff*(superficie||0);
-                const ue=params?.premiums?.['prodotti-ue']?1.10:1.0;
-                const conUE=base*ue; const finale=Math.min(conUE, imax);
-                return { result: finale, formula:`Itot = p × min(C, ${cmax}) × Sed${ue>1?' × 1.10 (prodotti UE)':''}; Imas=${imax.toLocaleString('it-IT')}€`, variables:{p,C:costo_specifico||0,Ceff,Sed:superficie||0,UE:ue>1,Imas:imax}, steps:[`p=${p.toFixed(2)}`,`Ceff=min(${(costo_specifico||0).toFixed(2)}, ${cmax})=${Ceff.toFixed(2)}`,`Base=${p.toFixed(2)}×${Ceff.toFixed(2)}×${(superficie||0).toFixed(2)}=${base.toFixed(2)}`, ue>1?`UE: ${base.toFixed(2)}×1.10=${conUE.toFixed(2)}`:`UE: non applicata`, `Finale=min(${conUE.toFixed(2)}, ${imax})=${finale.toFixed(2)}`] };
+                const cmax = 60, imax = 100000;
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'building-automation');
+                const p = det.p;
+                const Ceff = Math.min(costo_specifico||0, cmax);
+                const base = p * Ceff * (superficie||0);
+                const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
+                const finale = Math.min(base, imax);
+                return {
+                    result: finale,
+                    formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected?' (premio UE incluso nella percentuale)':''}; Imas=${imax.toLocaleString('it-IT')}€`,
+                    variables: { p, C: costo_specifico||0, Ceff, Sed: superficie||0, UE: ueSelected, Imas: imax },
+                    steps: [
+                        `p=${p.toFixed(2)}`,
+                        `Ceff=min(${(costo_specifico||0).toFixed(2)}, ${cmax})=${Ceff.toFixed(2)}`,
+                        `Base=${p.toFixed(2)}×${Ceff.toFixed(2)}×${(superficie||0).toFixed(2)}=${base.toFixed(2)}`,
+                        ueSelected?`UE: premio UE applicato e incluso nella percentuale`:`UE: non applicata`,
+                        `Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`
+                    ]
+                };
             }
         },
         'infrastrutture-ricarica': {
@@ -1814,12 +1685,14 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 { id: 'potenza_contrattuale', name: 'Potenza termica contrattuale (kW)', type: 'number', min: 0 },
                 { id: 'costo_totale', name: 'Costo totale dell\'allacciamento (€)', type: 'number', min: 0 }
             ],
-            calculate: (params, operatorType) => {
+            calculate: (params, operatorType, contextData) => {
                 const { potenza_contrattuale, costo_totale } = params;
                 if (!potenza_contrattuale || !costo_totale) return 0;
                 
                 // Formula: Itot = percentuale × C × Pnsc
-                // Sezione 2.7: 65% della spesa, con Cmax variabile per fasce
+                // Determiniamo la percentuale centralmente
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'teleriscaldamento');
+                const percentuale = det.p;
                 
                 let cmax;
                 if (potenza_contrattuale <= 35) {
@@ -1830,7 +1703,6 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     cmax = 130;
                 }
                 
-                const percentuale = 0.65;
                 const costoAmmissibile = potenza_contrattuale * cmax;
                 const costoEffettivo = Math.min(costo_totale, costoAmmissibile);
                 
@@ -1848,11 +1720,20 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 
                 return Math.min(incentivo, imax);
             },
-            explain: (params) => {
-                const { potenza_contrattuale, costo_totale } = params; const P=potenza_contrattuale||0; let cmax, imax;
+            explain: (params, operatorType, contextData) => {
+                const { potenza_contrattuale, costo_totale } = params; const P = potenza_contrattuale || 0; let cmax, imax;
                 if (P<=35){ cmax=200; imax=6500; } else if (P<=100){ cmax=160; imax=15000; } else { cmax=130; imax=30000; }
-                const costoAmmissibile=P*cmax; const costoEffettivo=Math.min(costo_totale||0, costoAmmissibile); const base=0.65*costoEffettivo; const finale=Math.min(base, imax);
-                return { result: finale, formula:`Itot = 65% × min(Spesa, Pn × Cmax); Imas=${imax.toLocaleString('it-IT')}€`, variables:{Spesa:costo_totale||0,Pn:P,cmax,Imas:imax}, steps:[`C_amm=P×Cmax=${P}×${cmax}=${costoAmmissibile.toFixed(2)}`,`Spesa_eff=min(${(costo_totale||0).toFixed(2)}, ${costoAmmissibile.toFixed(2)})=${costoEffettivo.toFixed(2)}`,`Base=0.65×${costoEffettivo.toFixed(2)}=${base.toFixed(2)}`,`Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`] };
+
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'teleriscaldamento');
+                const percentuale = det.p;
+                const percentualeDesc = det.pDesc;
+
+                const costoAmmissibile = P * cmax;
+                const costoEffettivo = Math.min(costo_totale || 0, costoAmmissibile);
+                const base = percentuale * costoEffettivo;
+                const finale = Math.min(base, imax);
+
+                return { result: finale, formula:`Itot = ${Math.round(percentuale*100)}% × min(Spesa, Pn × Cmax); Imas=${imax.toLocaleString('it-IT')}€`, variables:{Spesa:costo_totale||0,Pn:P,cmax,Imas:imax, Percentuale: percentuale, PercentualeDesc: percentualeDesc}, steps:[`C_amm=P×Cmax=${P}×${cmax}=${costoAmmissibile.toFixed(2)}`,`Spesa_eff=min(${(costo_totale||0).toFixed(2)}, ${costoAmmissibile.toFixed(2)})=${costoEffettivo.toFixed(2)}`,`Base=${(percentuale).toFixed(2)}×${costoEffettivo.toFixed(2)}=${base.toFixed(2)}`,`Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`] };
             }
         },
         'microcogenerazione': {
@@ -1865,28 +1746,31 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 { id: 'potenza_elettrica', name: 'Potenza elettrica nominale (kWe)', type: 'number', min: 0, max: 50 },
                 { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0 }
             ],
-            calculate: (params, operatorType) => {
+            calculate: (params, operatorType, contextData) => {
                 const { potenza_elettrica, costo_totale } = params;
                 if (!potenza_elettrica || !costo_totale) return 0;
-                
+
                 // Formula: Itot = percentuale × C × Pnint
-                // Sezione 2.8: 65% della spesa, Cmax 5000 €/kWe, Imas 100.000 €
-                
-                const percentuale = 0.65;
+                // Determiniamo percentuale centralmente
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'microcogenerazione');
+                const percentuale = det.p;
                 const cmax = 5000; // €/kWe
                 const imax = 100000; // €
-                
+
                 const costoAmmissibile = potenza_elettrica * cmax;
                 const costoEffettivo = Math.min(costo_totale, costoAmmissibile);
-                
+
                 const incentivo = percentuale * costoEffettivo;
-                
+
                 return Math.min(incentivo, imax);
             },
-            explain: (params) => {
-                const { potenza_elettrica, costo_totale } = params; const P=potenza_elettrica||0; const cmax=5000; const imax=100000;
-                const costoAmm=P*cmax; const costoEff=Math.min(costo_totale||0, costoAmm); const base=0.65*costoEff; const finale=Math.min(base, imax);
-                return { result: finale, formula:`Itot = 65% × min(Spesa, P_el × 5000€/kWe); Imas=${imax.toLocaleString('it-IT')}€`, variables:{Spesa:costo_totale||0,P_el:P,Imas:imax}, steps:[`C_amm=P_el×5000=${P}×5000=${costoAmm.toFixed(2)}`,`Spesa_eff=min(${(costo_totale||0).toFixed(2)}, ${costoAmm.toFixed(2)})=${costoEff.toFixed(2)}`,`Base=0.65×${costoEff.toFixed(2)}=${base.toFixed(2)}`,`Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`] };
+            explain: (params, operatorType, contextData) => {
+                const { potenza_elettrica, costo_totale } = params; const P = potenza_elettrica || 0; const cmax = 5000; const imax = 100000;
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'microcogenerazione');
+                const percentuale = det.p;
+
+                const costoAmm = P * cmax; const costoEff = Math.min(costo_totale || 0, costoAmm); const base = percentuale * costoEff; const finale = Math.min(base, imax);
+                return { result: finale, formula:`Itot = ${Math.round(percentuale*100)}% × min(Spesa, P_el × 5000€/kWe); Imas=${imax.toLocaleString('it-IT')}€`, variables:{Spesa:costo_totale||0,P_el:P,Imas:imax, Percentuale: percentuale}, steps:[`C_amm=P_el×5000=${P}×5000=${costoAmm.toFixed(2)}`,`Spesa_eff=min(${(costo_totale||0).toFixed(2)}, ${costoAmm.toFixed(2)})=${costoEff.toFixed(2)}`,`Base=${(percentuale).toFixed(2)}×${costoEff.toFixed(2)}=${base.toFixed(2)}`,`Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`] };
             }
         },
         'diagnosi-energetica': {
@@ -1927,10 +1811,10 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             calculate: (params, operatorType, contextData) => {
                 const { superficie_edificio, tipo_edificio, costo_sostenuto } = params;
                 if (!superficie_edificio || !tipo_edificio || !costo_sostenuto) return 0;
-                
+
                 // Determinazione costo specifico e massimali secondo tabella decreto
                 let costoSpecifico, valoreMassimoErogabile;
-                
+
                 switch(tipo_edificio) {
                     case 'e1_fino_1600':
                         costoSpecifico = 1.50;
@@ -1956,25 +1840,21 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         costoSpecifico = 2.50;
                         valoreMassimoErogabile = 13000;
                 }
-                
-                // Determina la percentuale di incentivo
-                let percentuale;
-                if (operatorType === 'pa' || operatorType === 'ets_non_economic') {
-                    percentuale = 1.0; // 100% per PA e ETS non economici
-                } else {
-                    percentuale = 0.50; // 50% per altri soggetti con obbligo
-                }
-                
+
+                // Determina la percentuale di incentivo centralmente
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'diagnosi-energetica');
+                const percentuale = det.p;
+
                 // Formula: I = Superficie edificio × Costo specifico × Percentuale
                 const incentivoCalcolato = superficie_edificio * costoSpecifico * percentuale;
-                
+
                 // Limita il costo massimo riconosciuto
                 const costoMassimoRiconosciuto = superficie_edificio * costoSpecifico;
                 const costoEffettivo = Math.min(costo_sostenuto, costoMassimoRiconosciuto);
-                
+
                 // Calcola l'incentivo basato sul costo effettivo
                 const incentivoFinale = costoEffettivo * percentuale;
-                
+
                 // Applica il limite massimo erogabile
                 return Math.min(incentivoFinale, valoreMassimoErogabile);
             },
@@ -2025,15 +1905,10 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         tipoDescrizione = 'Altri edifici';
                 }
                 
-                // Percentuale
-                let percentuale, percentualeDesc;
-                if (operatorType === 'pa' || operatorType === 'ets_non_economic') {
-                    percentuale = 1.0;
-                    percentualeDesc = '100% (PA/ETS non economici)';
-                } else {
-                    percentuale = 0.50;
-                    percentualeDesc = '50% (altri soggetti con obbligo)';
-                }
+                // Percentuale (centralizzata)
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'diagnosi-energetica');
+                const percentuale = det.p;
+                const percentualeDesc = det.pDesc;
                 
                 // Calcoli
                 const costoMassimoRiconosciuto = superficie_edificio * costoSpecifico;
@@ -2079,23 +1954,23 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
     // Definizione delle premialità e maggiorazioni
     premiums: {
+        // NOTE: multi-intervento non è più applicato come maggiorazione percentuale sull'incentivo
+        // (es. non aumentiamo il valore calcolato dal 25% al 30% con un moltiplicatore). La regola
+        // di multi-intervento è gestita centralmente nella funzione `determinePercentuale` che
+        // imposta la percentuale p = 55% per gli interventi 1.A/1.B quando applicabile. Manteniamo
+        // una definizione descrittiva qui solo per scopo informativo/di UI.
         'multi-intervento': {
-            name: 'Maggiorazione multi-intervento',
-            description: 'Porta l\'incentivo dal 25% al 30% dei costi ammissibili per interventi Titolo II (1.A e 1.B) quando combinati con interventi Titolo III (2.A, 2.B, 2.C, 2.E) - Art. Regole Applicative par. 607',
-            scope: 'per-intervention', // Applicato solo agli interventi specifici
-            type: 'percentage',
-            value: 20, // +20% sull'incentivo calcolato (matematicamente: 30/25 = 1.20)
-            applicableToInterventions: ['isolamento-opache', 'sostituzione-infissi'], // Solo 1.A e 1.B
+            name: 'Premialità Multi-intervento',
+            description: 'Regola multi-intervento: imposta p = 55% per 1.A e (condizionalmente) per 1.B quando combinati con interventi Titolo III. NON è applicata come maggiorazione percentuale addizionale sul valore già calcolato.',
+            scope: 'per-intervention',
+            type: 'flag',
+            value: 0,
+            applicableToInterventions: ['isolamento-opache', 'sostituzione-infissi'],
             isApplicable: (selectedInterventions) => {
-                // Deve esserci almeno un intervento Titolo II (1.A o 1.B)
-                const hasTitoloII = selectedInterventions.some(id => 
-                    id === 'isolamento-opache' || id === 'sostituzione-infissi'
-                );
-                // E almeno un intervento Titolo III tra 2.A, 2.B, 2.C, 2.E
-                const hasTitoloIII = selectedInterventions.some(id => 
-                    id === 'pompa-calore' || id === 'sistemi-ibridi' || 
-                    id === 'biomassa' || id === 'scaldacqua-pdc'
-                );
+                const hasTitoloII = selectedInterventions.some(id => id === 'isolamento-opache' || id === 'sostituzione-infissi');
+                const hasTitoloIII = selectedInterventions.some(id => {
+                    return ['pompa-calore', 'sistemi-ibridi', 'biomassa', 'scaldacqua-pdc'].includes(id);
+                });
                 return hasTitoloII && hasTitoloIII;
             }
         },
@@ -2146,6 +2021,95 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         }
     },
 
+    // Helper per determinare la percentuale di incentivo (p) secondo le regole unificate
+    // selectedInterventions: array di interventi selezionati (per valutare multi-intervento)
+    // params: parametri specifici dell'intervento (contiene zona_climatica, premi, ecc.)
+    // operatorType: tipo di operatore (pa, private_tertiary_..., ecc.)
+    // contextData: dati di contesto (buildingSubcategory, is_comune, is_piccolo_comune, subjectType, implementationMode, selectedInterventions)
+    // interventionId: id dell'intervento corrente (es. 'isolamento-opache') per regole specifiche
+    determinePercentuale: function(selectedInterventions = [], params = {}, operatorType = '', contextData = {}, interventionId = '') {
+        // Regole richieste:
+        // 1) base 40%
+        // 2) zona climatica E/F => 50%
+        // 3) multi-intervento: 55% per 1.A (isolamento-opache) se insieme a almeno uno dei 2A/2B/2C/2E;
+        //    55% per 1.B (sostituzione-infissi) solo se il multi-intervento è stato applicato ad 1.A (cioè c'è 1A + almeno uno dei 2A/2B/2C/2E)
+        // 4) premio prodotti-UE: incrementa p di +10 percentage point (es. 50% -> 60%), limitando al 100%
+        // 5) p = 100% se edificio su scuole/ospedali/carceri (Art.48-ter) o Comune <15k (piccolo comune). Applichiamo questa regola indipendentemente dalla modalità di realizzazione.
+
+        // Normalizza input
+        const sel = Array.isArray(selectedInterventions) ? selectedInterventions : (contextData && contextData.selectedInterventions) ? contextData.selectedInterventions : [];
+        const zona = params?.zona_climatica || params?.zonaClimatica || contextData?.zona_climatica || contextData?.zonaClimatica;
+        const hasUE = (params?.premiums && params.premiums['prodotti-ue']) || (contextData?.globalPremiums && contextData.globalPremiums.includes && contextData.globalPremiums.includes('prodotti-ue')) || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')) || false;
+
+        // Art.48-ter check
+    const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
+
+        // Piccolo comune: applicazione semplificata (non richiediamo più implementationMode === 'direct')
+        const isPiccoloComune = contextData?.is_comune === true && contextData?.is_edificio_comunale === true && contextData?.is_piccolo_comune === true && contextData?.subjectType === 'pa';
+
+        // Multi-intervento: valutiamo la combinazione (Titolo II 1.A/1.B con almeno uno di Titolo III 2.A/2.B/2.C/2.E)
+        // Use a dynamic detection of Titolo III interventions to avoid brittle hard-coded lists.
+        // Heuristic: interventions whose description mentions 'Art. 8' or whose name starts with '2.'
+        const titoloIIIset = Object.keys(this.interventions || {}).filter(id => {
+            const it = this.interventions[id];
+            if (!it) return false;
+            const desc = (it.description || '').toString();
+            const name = (it.name || '').toString();
+            return desc.includes('Art. 8') || name.trim().startsWith('2.');
+        });
+        const hasTitoloIII = sel.some(id => titoloIIIset.includes(id));
+        const has1A = sel.includes('isolamento-opache');
+        const has1B = sel.includes('sostituzione-infissi');
+
+        let p = 0.40;
+        let pDesc = '40% (base)';
+
+        // Priorità: Art.48-ter o piccolo comune => 100%
+        if (isArt48ter) {
+            p = 1.0;
+            const buildingNames = { 'tertiary_school': 'scuole', 'tertiary_hospital': 'ospedali' };
+            pDesc = `100% (Art. 48-ter: ${buildingNames[contextData.buildingSubcategory] || 'edifici speciali'})`;
+        } else if (isPiccoloComune) {
+            p = 1.0;
+            pDesc = '100% (Comune < 15.000 abitanti)';
+        } else {
+            // Multi-intervento: regole per 1.A e 1.B
+            if (interventionId === 'isolamento-opache') {
+                if (hasTitoloIII && has1A) {
+                    p = 0.55;
+                    pDesc = '55% (multi-intervento 1.A + 2.A/2.B/2.C/2.E)';
+                }
+            } else if (interventionId === 'sostituzione-infissi') {
+                // 1.B: 55% solo se multi-intervento è stato applicato al 1.A (cioè esiste 1.A + almeno uno dei Titolo III)
+                if (has1A && hasTitoloIII) {
+                    p = 0.55;
+                    pDesc = '55% (multi-intervento su 1.A, applicato anche a 1.B)';
+                }
+            }
+
+            // Se non impostato da multi-intervento, valutiamo zona climatica e fallback base
+            if (p === 0.40) {
+                // Zona climatica E/F => 50%
+                if (zona === 'E' || zona === 'F') {
+                    p = 0.50;
+                    pDesc = `50% (zona climatica ${zona})`;
+                } else {
+                    // Default: base 40%
+                    p = 0.40;
+                    pDesc = '40% (base)';
+                }
+            }
+        }
+
+        // Premio UE: incrementa la percentuale di incentivo di +10 punti percentuali (es. 0.50 -> 0.60)
+        if (hasUE) {
+            p = Math.min(1.0, +(p + 0.10).toFixed(2));
+            pDesc = `${Math.round(p*100)}% (incluso premio Prodotti UE)`;
+        }
+
+        return { p, pDesc };
+    },
+
     /**
      * Calcola l'incentivo totale per più interventi combinati
      * @param {Array} selectedInterventions - Array di ID interventi selezionati
@@ -2162,7 +2126,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         // VERIFICA CONDIZIONI PER INCENTIVO AL 100%
         // 1. Art. 48-ter: scuole, ospedali, carceri (PA/ETS)
         const isArt48ter = contextData.buildingSubcategory && 
-                          ['tertiary_school', 'tertiary_hospital', 'tertiary_prison'].includes(contextData.buildingSubcategory);
+                          ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
         
         // 2. Comuni < 15.000 abitanti - SOLO per Comuni con intervento diretto su edificio di proprietà e utilizzo comunale
         // Requisiti cumulativi:
@@ -2176,7 +2140,12 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                                contextData.subjectType === 'pa' &&
                                contextData.implementationMode === 'direct';
         
-        const hasIncentivo100 = isArt48ter || isPiccoloComune;
+    const hasIncentivo100 = isArt48ter || isPiccoloComune;
+
+    // Assicuriamoci che contextData contenga la lista degli interventi selezionati
+    contextData = contextData || {};
+    contextData.selectedInterventions = selectedInterventions || [];
+    contextData.selectedPremiums = globalPremiums || [];
 
         if (hasIncentivo100) {
             // Modalità speciale: incentivo = 100% spesa sostenuta, max = Imas calcolato
@@ -2220,7 +2189,9 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 // Calcola Imas (incentivo massimo standard)
                 let imas = 0;
                 try {
-                    imas = intervention.calculate(params, operatorType);
+                    // Passiamo contextData come terzo argomento in modo che le singole formule
+                    // possano valutare multi-intervento, Art.48-ter e altri contesti condivisi.
+                    imas = intervention.calculate(params, operatorType, contextData);
                 } catch (error) {
                     details.push({
                         id: intId,
@@ -2243,8 +2214,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 if (isArt48ter) {
                     const buildingNames = {
                         'tertiary_school': 'Scuola',
-                        'tertiary_hospital': 'Ospedale/Struttura sanitaria',
-                        'tertiary_prison': 'Carcere'
+                        'tertiary_hospital': 'Ospedale/Struttura sanitaria'
                     };
                     incentivo100Reason = `Art. 48-ter (${buildingNames[contextData.buildingSubcategory]})`;
                 } else if (isPiccoloComune) {
@@ -2268,11 +2238,10 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             });
 
             let premiumNote = '';
-            if (isArt48ter) {
+                if (isArt48ter) {
                 const buildingNames = {
                     'tertiary_school': 'edificio scolastico',
-                    'tertiary_hospital': 'struttura ospedaliera/sanitaria pubblica',
-                    'tertiary_prison': 'struttura penitenziaria'
+                    'tertiary_hospital': 'struttura ospedaliera/sanitaria pubblica'
                 };
                 premiumNote = `Art. 48-ter applicato automaticamente per ${buildingNames[contextData.buildingSubcategory]}. Incentivo al 100% della spesa ammissibile (totale spesa: €${totalCost.toLocaleString('it-IT')}, tetto massimo: €${totalImas.toLocaleString('it-IT')})`;
             } else if (isPiccoloComune) {
@@ -2316,8 +2285,9 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             
             // Calcola incentivo base (senza premialità globali)
             let baseIncentive = 0;
-            try {
-                baseIncentive = intervention.calculate(params, operatorType);
+                try {
+                // Passiamo contextData come terzo argomento per coerenza
+                baseIncentive = intervention.calculate(params, operatorType, contextData);
             } catch (error) {
                 details.push({
                     id: intId,
@@ -2340,21 +2310,16 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 if (premData.scope !== 'per-intervention') continue;
                 if (premId === 'prodotti-ue') continue; // Prodotti UE già integrato nelle formule
                 
-                // Per multi-intervento: è AUTOMATICO (non richiede selezione utente)
+                // Per multi-intervento: comportamento speciale
+                // Non applichiamo più una maggiorazione percentuale monetaria (es. non moltiplichiamo il valore calcolato).
+                // La regola multi-intervento è già gestita nella funzione `determinePercentuale` (p = 55%).
                 if (premId === 'multi-intervento') {
-                    // Verifica se la combinazione di interventi soddisfa i requisiti (Titolo II + Titolo III)
                     const isApplicableToCombination = premData.isApplicable(selectedInterventions);
                     if (!isApplicableToCombination) continue;
-                    // Verifica se questo specifico intervento riceve il premio (solo 1.A e 1.B)
                     const isApplicableToThisInt = premData.applicableToInterventions?.includes(intId);
                     if (!isApplicableToThisInt) continue;
-                    // Applica il premio
-                    let delta = 0;
-                    if (premData.type === 'percentage') {
-                        delta = finalIncentive * (premData.value / 100);
-                        finalIncentive += delta;
-                    }
-                    appliedPremiums.push({ id: premId, name: premData.name, value: delta });
+                    // Registra a scopo informativo (value = 0) ma NON modifica l'incentivo calcolato
+                    appliedPremiums.push({ id: premId, name: premData.name, value: 0, note: 'Applicata regola centrale p=55% (nessun delta monetario)' });
                     continue; // Passa al prossimo premio
                 }
                 
@@ -2395,18 +2360,30 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         const appliedGlobalPremiums = [];
 
         // Verifica se il premio multi-intervento è stato applicato (per mostrarlo nei global premiums)
-        let multiInterventoTotalBonus = 0;
-        details.forEach(detail => {
-            const multiPremium = detail.appliedPremiums?.find(p => p.id === 'multi-intervento');
-            if (multiPremium) {
-                multiInterventoTotalBonus += multiPremium.value;
-            }
-        });
-        if (multiInterventoTotalBonus > 0) {
+        // Ora multi-intervento è puramente informativo (la regola imposta p=55% tramite determinePercentuale),
+        // quindi mostriamo una voce informativa se presente tra i dettagli.
+        const anyMultiApplied = details.some(detail => detail.appliedPremiums?.some(p => p.id === 'multi-intervento'));
+        if (anyMultiApplied) {
             appliedGlobalPremiums.push({
                 id: 'multi-intervento',
-                name: 'Multi-intervento (dal 25% al 30%) - già applicato agli interventi Titolo II',
-                value: multiInterventoTotalBonus
+                name: 'Premialità Multi-intervento',
+                value: 0,
+                note: 'Applicata regola multi-intervento tramite percentuale centrale (nessuna maggiorazione addizionale)' 
+            });
+        }
+
+        // Mostriamo il premio Prodotti UE come voce informativa se è stato selezionato
+        // (attenzione: il valore monetario è già incluso nelle singole formule tramite la
+        // percentuale calcolata centralmente, quindi qui lo registriamo solo a scopo informativo)
+        const hasUE = (Array.isArray(globalPremiums) && globalPremiums.includes('prodotti-ue'))
+            || (contextData && Array.isArray(contextData.selectedPremiums) && contextData.selectedPremiums.includes('prodotti-ue'))
+            || false;
+        if (hasUE) {
+            appliedGlobalPremiums.push({
+                id: 'prodotti-ue',
+                name: 'Premio Prodotti UE',
+                value: 0,
+                note: 'Prodotti UE applicato e incluso nella percentuale di incentivo'
             });
         }
 

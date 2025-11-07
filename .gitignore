@@ -1,0 +1,27 @@
+# Node
+node_modules/
+package-lock.json
+
+# Build artifacts
+build/
+dist/
+package-sharepoint/
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Excel temp files
+~$*.xlsx
+~$*.xls
+
+# IDE
+.vscode/settings.json
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*

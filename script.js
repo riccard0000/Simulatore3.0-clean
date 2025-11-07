@@ -76,7 +76,7 @@ async function initCalculator() {
         }
 
         // Memorizza la sottocategoria se è una sottocategoria terziario
-        if (['tertiary_generic', 'tertiary_school', 'tertiary_hospital', 'tertiary_prison'].includes(state.selectedBuilding)) {
+    if (['tertiary_generic', 'tertiary_school', 'tertiary_hospital'].includes(state.selectedBuilding)) {
             state.buildingSubcategory = state.selectedBuilding;
         } else {
             state.buildingSubcategory = '';
@@ -300,28 +300,7 @@ async function initCalculator() {
             return;
         }
 
-        // Mostra avviso normativo se presente
-        if (mapping.note && mapping.requiresPublicOwnership) {
-            const warningDiv = document.createElement('div');
-            warningDiv.className = 'regulatory-warning';
-            warningDiv.innerHTML = `
-                <div style="background: #fff3cd; border: 2px solid #ff9800; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
-                    <h4 style="margin: 0 0 10px 0; color: #ff6f00; display: flex; align-items: center; gap: 8px;">
-                        <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                            <path d="M10 0C4.48 0 0 4.48 0 10s4.48 10 10 10 10-4.48 10-10S15.52 0 10 0zm1 15H9v-2h2v2zm0-4H9V5h2v6z"/>
-                        </svg>
-                        ⚠️ Attenzione: Requisito normativo
-                    </h4>
-                    <p style="margin: 0; color: #663c00; line-height: 1.6;">
-                        ${mapping.note}
-                    </p>
-                    <p style="margin: 10px 0 0 0; font-size: 0.9em; color: #666;">
-                        <strong>Riferimento:</strong> Paragrafo 12.10.4 delle Regole Applicative CT 3.0
-                    </p>
-                </div>
-            `;
-            interventionsList.appendChild(warningDiv);
-        }
+        // Note: regulatory warning removed per user request (no informational box shown)
 
         // Filtra interventi in base alle regole della matrice
         const filteredEntries = Object.entries(calculatorData.interventions).filter(([_, data]) => {
@@ -1392,7 +1371,14 @@ async function initCalculator() {
             is_edificio_comunale: state.subjectSpecificData.is_edificio_comunale || false,
             is_piccolo_comune: state.subjectSpecificData.is_piccolo_comune || false,
             subjectType: state.selectedSubject,
-            implementationMode: state.selectedMode
+            implementationMode: state.selectedMode,
+            // Include selected interventions and premiums so determinePercentuale/explain
+            // can evaluate multi-intervento and UE premi correctly.
+            selectedInterventions: Array.isArray(state.selectedInterventions) ? state.selectedInterventions.slice() : [],
+            selectedPremiums: Array.isArray(state.selectedPremiums) ? state.selectedPremiums.slice() : [],
+            globalPremiums: Array.isArray(state.selectedPremiums) ? state.selectedPremiums.slice() : [],
+            inputValues: state.inputValues || {},
+            subjectSpecificData: state.subjectSpecificData || {}
         };
 
         // 1. Calcolo combinato con gestione automatica di premi globali e massimali
@@ -1434,9 +1420,12 @@ async function initCalculator() {
                     // Premi per-intervento applicati
                     let perPremHtml = '';
                     if (detail && detail.appliedPremiums && detail.appliedPremiums.length) {
-                        perPremHtml = `<div class="premi-int"><strong>Premialità sull'intervento:</strong> <ul>` +
-                            detail.appliedPremiums.map(p=>`<li>${p.name}: € ${formatMoney(p.value)}</li>`).join('') +
-                            `</ul></div>`;
+                        const items = detail.appliedPremiums.map(p => {
+                            const note = p.note ? ` — ${escapeHtml(p.note)}` : '';
+                            if (!p.value) return `<li>${escapeHtml(p.name)}${note}</li>`;
+                            return `<li>${escapeHtml(p.name)}: € ${formatMoney(p.value)}${note}</li>`;
+                        }).join('');
+                        perPremHtml = `<div class="premi-int"><strong>Premialità sull'intervento:</strong> <ul>` + items + `</ul></div>`;
                     }
 
                     // Se nessuna info è stata restituita, mostriamo un messaggio diagnostico
@@ -1506,7 +1495,12 @@ async function initCalculator() {
         // 4.b Riepilogo premi globali e massimali
         detailsHtml += '<h4>🎯 Premi Globali e Massimali:</h4>';
         if (combo.appliedGlobalPremiums && combo.appliedGlobalPremiums.length) {
-            detailsHtml += '<ul>' + combo.appliedGlobalPremiums.map(p=>`<li>${p.name}: <strong>€ ${formatMoney(p.value)}</strong></li>`).join('') + '</ul>';
+            const globalItems = combo.appliedGlobalPremiums.map(p => {
+                const note = p.note ? ` — ${escapeHtml(p.note)}` : '';
+                if (!p.value) return `<li>${escapeHtml(p.name)}${note}</li>`;
+                return `<li>${escapeHtml(p.name)}: <strong>€ ${formatMoney(p.value)}</strong>${note}</li>`;
+            }).join('');
+            detailsHtml += '<ul>' + globalItems + '</ul>';
         } else {
             detailsHtml += '<p class="notice">Nessuna premialità globale applicata.</p>';
         }
