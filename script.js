@@ -1381,6 +1381,12 @@ async function initCalculator() {
             contextData
         );
 
+        // DIAGNOSTICA: log completo del risultato di calcolo per debugging header vs details
+        console.log('DEBUG calculateIncentive - inputsByIntervention:', normalizedInputsByIntervention);
+        console.log('DEBUG calculateIncentive - selectedInterventions:', state.selectedInterventions);
+        console.log('DEBUG calculateIncentive - operator:', state.selectedOperator);
+        console.log('DEBUG calculateIncentive - combo:', combo);
+
         let detailsHtml = '<h4>Dettaglio Calcolo per Intervento:</h4><ul class="int-list">';
 
         // 1.a Dettaglio per ciascun intervento con formula e variabili
@@ -1513,8 +1519,19 @@ async function initCalculator() {
         detailsHtml += 'L\'ammissione all\'incentivo e la determinazione del suo ammontare sono subordinate all\'esito positivo dell\'istruttoria condotta dal GSE secondo i criteri stabiliti dal D.M. Conto Termico 3.0.</p>';
         detailsHtml += '</div>';
 
-        // 6. Mostra i risultati
-        incentiveResultEl.textContent = `€ ${formatMoney(combo.total)}`;
+        // 6. Mostra i risultati (usa fallback se combo.total è zero ma i dettagli contengono valori)
+        let displayTotal = combo.total || 0;
+        if ((!displayTotal || displayTotal === 0) && Array.isArray(combo.details) && combo.details.length > 0) {
+            const sumDetails = combo.details.reduce((s, d) => s + (Number(d.finalIncentive) || 0), 0);
+            if (sumDetails > 0) {
+                console.warn('DEBUG: combo.total is zero — falling back to sum of details for display:', sumDetails);
+                displayTotal = sumDetails;
+                // Annotate detailsHtml so the user knows this was a fallback
+                detailsHtml = '<div class="notice">⚠️ Nota: il valore mostrato in header è calcolato come somma dei dettagli poiché il totale combinato risultava a 0.</div>' + detailsHtml;
+            }
+        }
+
+        incentiveResultEl.textContent = `€ ${formatMoney(displayTotal)}`;
         resultDetailsEl.innerHTML = detailsHtml;
         resultsContainer.style.display = 'block';
 
