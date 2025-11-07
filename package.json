@@ -1,0 +1,21 @@
+{
+  "name": "simulatore-conto-termico-30",
+  "version": "1.0.0",
+  "description": "Simulatore Conto Termico 3.0 per GSE",
+  "scripts": {
+    "clean:formulas": "node scripts/remove-formulas.js",
+    "prepare:html": "node scripts/prepare-html.js",
+    "package": "powershell -ExecutionPolicy Bypass -File scripts/package.ps1",
+    "build": "npm run clean:formulas && npm run prepare:html && npm run package",
+    "dev": "npx http-server src -p 8080 -o",
+    "test": "npx http-server . -p 8081 -o tests/test-runner.html",
+    "test:package": "npx http-server package-sharepoint -p 8082 -o",
+    "verify": "node tests/verify-tests.js"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  },
+  "author": "GSE",
+  "license": "UNLICENSED",
+  "private": true
+}

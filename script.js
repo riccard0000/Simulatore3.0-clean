@@ -1,16 +1,7 @@
 // Funzione di inizializzazione principale
 async function initCalculator() {
-    // Attendi che WASM sia caricato (se disponibile)
-    if (typeof loadWASM === 'function') {
-        const wasmLoaded = await loadWASM();
-        if (wasmLoaded) {
-            console.log('✅ Calcoli con WASM attivati');
-        } else {
-            console.log('⚠️  Usando calcoli JavaScript (WASM non disponibile)');
-        }
-    } else {
-        console.log('ℹ️  Usando calcoli JavaScript (loader WASM non trovato)');
-    }
+    // WASM support rimosso: usiamo sempre i calcoli JavaScript
+    console.log('ℹ️  Usando calcoli JavaScript (WASM rimosso)');
 
     // Elementi DOM per i passi
     const subjectTypeSelect = document.getElementById('subject-type');
