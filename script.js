@@ -1385,7 +1385,9 @@ async function initCalculator() {
         console.log('DEBUG calculateIncentive - inputsByIntervention:', normalizedInputsByIntervention);
         console.log('DEBUG calculateIncentive - selectedInterventions:', state.selectedInterventions);
         console.log('DEBUG calculateIncentive - operator:', state.selectedOperator);
-        console.log('DEBUG calculateIncentive - combo:', combo);
+    console.log('DEBUG calculateIncentive - combo:', combo);
+    // Expose last combo for easier debugging in browser console
+    try { window.__LAST_COMBO = combo; } catch (e) { /* ignore if not allowed */ }
 
         let detailsHtml = '<h4>Dettaglio Calcolo per Intervento:</h4><ul class="int-list">';
 

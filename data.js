@@ -1067,7 +1067,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 },
                 { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] }
             ],
-            calculate: (params, operatorType) => {
+            calculate: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico, zona_climatica } = params;
                 if (!superficie || !costo_specifico) return 0;
                 
@@ -1273,9 +1273,9 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0 },
                 { id: 'costo_specifico', name: 'Costo specifico C (€/m²)', type: 'computed', compute: (params) => params.superficie > 0 ? (params.costo_totale / params.superficie).toFixed(2) : '0.00' }
             ],
-            calculate: (params, operatorType) => {
+            calculate: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico } = params;
-                if (!superficie || !costo_specifico || !contextData) return 0;
+                if (!superficie || !costo_specifico) return 0;
                 
                 // Formula: Itot = %spesa × C × Sed, con Itot ≤ Imas
                 const cmax = 60; // €/m²
@@ -1284,7 +1284,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const costoEffettivo = Math.min(costo_specifico, cmax);
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'building-automation');
                 const percentuale = det.p;
-                
+
                 let incentivo = percentuale * costoEffettivo * superficie;
 
                 return Math.min(incentivo, imax);
