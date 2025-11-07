@@ -723,6 +723,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                 steps.push(`Zona climatica: ${zona_climatica}`);
                 steps.push(`Percentuale incentivazione: ${percentualeDesc}`);
+                steps.push(ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${percentuale.toFixed(2)})` : `  Premio Prodotti UE: non applicato`);
                 steps.push(`---`);
 
                 righe_opache.forEach((riga, index) => {
@@ -757,7 +758,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         : `  ✓ C (${costo_specifico.toFixed(2)}) ≤ Cmax (${cmax})`
                     );
                     steps.push(`  Incentivo riga = ${percentuale.toFixed(2)} × ${costoEffettivo.toFixed(2)} × ${superficie.toFixed(2)} = ${incentivoRiga.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
-                    steps.push(ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${percentuale.toFixed(2)})` : `  Premio Prodotti UE: non applicato`);
+                   
                     steps.push(`---`);
                 });
                 
@@ -1094,20 +1095,21 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 let cmax, imax;
                 if (['A','B','C'].includes(zona_climatica)) { cmax=1000; imax=2500000; } else { cmax=1300; imax=3000000; }
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'nzeb');
-                const p = det.p;
+                const percentuale = det.p;
+                const percentualeDesc = det.pDesc;
                 const Ceff = Math.min(costo_specifico||0, cmax);
-                const base = p * Ceff * (superficie||0);
+                const base = percentuale * Ceff * (superficie||0);
                 const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
                 const finale = Math.min(base, imax);
                 return {
                     result: finale,
                     formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected?' (premio UE incluso nella percentuale)':''}; Imas=${imax.toLocaleString('it-IT')}€`,
-                    variables: { p, C: costo_specifico||0, Ceff, Sed: superficie||0, UE: ueSelected, Imas: imax },
+                    variables: { p: percentuale, pDesc: percentualeDesc, C: costo_specifico||0, Ceff, Sed: superficie||0, UE: ueSelected, Imas: imax },
                     steps: [
-                        `p=${p.toFixed(2)}`,
+                        `Percentuale incentivazione: ${percentualeDesc}`,
+                        ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${percentuale.toFixed(2)})` : `  Premio Prodotti UE: non applicato`,
                         `Ceff=min(${(costo_specifico||0).toFixed(2)}, ${cmax})=${Ceff.toFixed(2)}`,
-                        `Base=${p.toFixed(2)}×${Ceff.toFixed(2)}×${(superficie||0).toFixed(2)}=${base.toFixed(2)}`,
-                        ueSelected?`UE: premio UE applicato e incluso nella percentuale`:`UE: non applicata`,
+                        `Base=${percentuale.toFixed(4)}×${Ceff.toFixed(2)}×${(superficie||0).toFixed(2)}=${base.toFixed(2)}`,
                         `Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`
                     ]
                 };
@@ -1210,9 +1212,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
                 const steps = [];
                 let incentivoTotale = 0;
-
                 steps.push(`Percentuale incentivazione: ${pDesc}`);
-                steps.push(ueSelected ? `Premio UE: applicato (+10 p.p.) (incluso nella percentuale)` : `Premio UE: non applicato`);
+                steps.push(ueSelected ? `Premio Prodotti UE: incluso nella percentuale di incentivazione` : `Premio UE: non applicato`);
                 steps.push(`---`);
 
                 righe_illuminazione.forEach((riga, index) => {
@@ -1291,14 +1292,30 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             },
             explain: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico } = params;
-                const cmax=60, imax=100000;
+                const cmax = 60, imax = 100000;
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'building-automation');
                 const p = det.p;
                 const pDesc = det.pDesc;
-                const Ceff=Math.min(costo_specifico||0,cmax);
-                const base=p*Ceff*(superficie||0);
-                const finale=Math.min(base, imax);
-                return { result: finale, formula:`Itot = p × min(C, ${cmax}) × Sed; Imas=${imax.toLocaleString('it-IT')}€`, variables:{p,C:costo_specifico||0,Ceff,Sed:superficie||0,Imas:imax,pDesc}, steps:[`Percentuale incentivazione: ${pDesc}`,`Ceff=min(${(costo_specifico||0).toFixed(2)}, ${cmax})=${Ceff.toFixed(2)}`,`Base=${p.toFixed(2)}×${Ceff.toFixed(2)}×${(superficie||0).toFixed(2)}=${base.toFixed(2)}`, `Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`] };
+                const Ceff = Math.min(costo_specifico || 0, cmax);
+                const base = p * Ceff * (superficie || 0);
+                const finale = Math.min(base, imax);
+
+                // Verifica se l'utente ha selezionato il premio Prodotti UE (solo per spiegazione)
+                const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
+
+                const steps = [];
+                steps.push(`Percentuale incentivazione: ${pDesc}`);
+                steps.push(ueSelected ? `UE: premio UE applicato e incluso nella percentuale (p=${p.toFixed(2)})` : `UE: non applicata`);
+                steps.push(`Ceff=min(${(costo_specifico||0).toFixed(2)}, ${cmax})=${Ceff.toFixed(2)}`);
+                steps.push(`Base=${p.toFixed(2)}×${Ceff.toFixed(2)}×${(superficie||0).toFixed(2)}=${base.toFixed(2)}`);
+                steps.push(`Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`);
+
+                return {
+                    result: finale,
+                    formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected ? ' (premio UE incluso nella percentuale)' : ''}; Imas=${imax.toLocaleString('it-IT')}€`,
+                    variables: { p, C: costo_specifico||0, Ceff, Sed: superficie||0, Imas: imax, pDesc, UE: ueSelected },
+                    steps
+                };
             }
         },
         'infrastrutture-ricarica': {
@@ -1306,7 +1323,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             description: 'Art. 5, comma 1, lett. g) - Realizzazione di infrastrutture per la ricarica di veicoli elettrici presso edifici pubblici o ad uso terziario per promuovere la mobilità sostenibile.',
             category: 'Efficienza Energetica',
                 allowedOperators: ['pa', 'private_tertiary_person', 'private_tertiary_small', 'private_tertiary_medium', 'private_tertiary_large'],
-                restrictionNote: 'SOLO per PA/ETS non economici e Soggetti Privati su edifici TERZIARIO. NO ambito residenziale. Deve essere congiunto a installazione pompa di calore elettrica.',
+                restrictionNote: 'SOLO per PA/ETS non economici e Soggetti Privati su edifici TERZIARIO. NO ambito residenziale.',
             inputs: [
                 { id: 'tipo_infrastruttura', name: 'Tipo infrastruttura', type: 'select', options: ['Standard monofase (7.4-22kW)', 'Standard trifase (7.4-22kW)', 'Media (22-50kW)', 'Alta (50-100kW)', 'Oltre 100kW'] },
                 { 
@@ -1334,10 +1351,10 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 },
                 { id: 'costo_totale', name: 'Costo totale sostenuto (€)', type: 'number', min: 0 }
             ],
-            calculate: (params, operatorType) => {
+            calculate: (params, operatorType, contextData) => {
                 const { tipo_infrastruttura, numero_punti, potenza, costo_totale } = params;
                 if (!costo_totale) return 0;
-                
+
                 // Limiti massimi di costo secondo Art. 5.1.g
                 let costoMassimoAmmissibile;
                 switch(tipo_infrastruttura) {
@@ -1358,21 +1375,38 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     default:
                         costoMassimoAmmissibile = 0;
                 }
-                
+
                 const spesaAmmissibile = Math.min(costo_totale, costoMassimoAmmissibile);
-                
-                // Incentivo = 30% della spesa ammissibile
-                let incentivo = 0.30 * spesaAmmissibile;
-                
+
+                // Determina la percentuale centralizzata (include eventuale premio Prodotti UE e regole multi-intervento)
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'infrastrutture-ricarica');
+                const percentuale = det.p;
+
+                // Incentivo = p × spesa ammissibile
+                let incentivo = percentuale * spesaAmmissibile;
+
                 // Note: "incentivo comunque non superiore a quello per pompe di calore elettriche"
                 // Per ora lasciamo solo la formula base
-                
+
                 return incentivo;
             },
-            explain: (params) => {
+            explain: (params, operatorType, contextData) => {
                 const { tipo_infrastruttura, numero_punti, potenza, costo_totale } = params;
                 let costoMassimoAmmissibile = 0;
                 const steps = [];
+
+                // Determina percentuale centralmente (include eventuale premio Prodotti UE)
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'infrastrutture-ricarica');
+                const percentuale = det.p;
+                const percentualeDesc = det.pDesc;
+
+                // Verifica se l'utente ha selezionato il premio Prodotti UE (solo per spiegazione)
+                const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
+
+                steps.push(`Percentuale incentivazione: ${percentualeDesc}`);
+                steps.push(ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${percentuale.toFixed(2)})` : `  Premio Prodotti UE: non applicato`);
+                steps.push(`---`);
+
                 switch(tipo_infrastruttura) {
                     case 'Standard monofase (7.4-22kW)': {
                         const n = parseInt(numero_punti, 10) || 0;
@@ -1398,10 +1432,10 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 }
                 const spesa = parseFloat(costo_totale || 0) || 0;
                 const spesaAmmissibile = Math.min(spesa, costoMassimoAmmissibile);
-                const incentivo = 0.30 * spesaAmmissibile;
+                const incentivo = percentuale * spesaAmmissibile;
                 steps.push(`Spesa ammissibile = min(Spesa, Cmax) = min(${spesa.toLocaleString('it-IT')}, ${costoMassimoAmmissibile.toLocaleString('it-IT')}) = ${spesaAmmissibile.toLocaleString('it-IT')}`);
-                steps.push(`Itot = 30% × Spesa ammissibile = 0,30 × ${spesaAmmissibile.toLocaleString('it-IT')} = ${incentivo.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
-                return { result: incentivo, formula:`Itot = 30% × min(Spesa, Cmax)`, variables:{Spesa:spesa, Cmax:costoMassimoAmmissibile, SpesaAmm:spesaAmmissibile}, steps };
+                steps.push(`Itot = p × Spesa ammissibile = ${percentuale.toFixed(4)} × ${spesaAmmissibile.toLocaleString('it-IT')} = ${incentivo.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
+                return { result: incentivo, formula:`Itot = p × min(Spesa, Cmax)${ueSelected ? ' (Prodotti UE inclusi nella percentuale)' : ''}`, variables:{Spesa:spesa, Cmax:costoMassimoAmmissibile, SpesaAmm:spesaAmmissibile, p:percentuale, pDesc:percentualeDesc, UE:ueSelected}, steps };
             }
         },
         'fotovoltaico-accumulo': {
@@ -1409,50 +1443,136 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             description: 'Art. 5, comma 1, lett. h) - Installazione di impianti fotovoltaici integrati con sistemi di accumulo elettrico per l\'autoconsumo dell\'energia prodotta e la riduzione dei prelievi dalla rete.',
             category: 'Efficienza Energetica',
                 allowedOperators: ['pa', 'private_tertiary_person', 'private_tertiary_small', 'private_tertiary_medium', 'private_tertiary_large'],
-                restrictionNote: 'SOLO per PA/ETS non economici e Soggetti Privati su edifici TERZIARIO. NO ambito residenziale. Deve essere congiunto a installazione pompa di calore elettrica.',
+                restrictionNote: 'SOLO per PA/ETS non economici e Soggetti Privati su edifici TERZIARIO. NO ambito residenziale.',
             inputs: [
                 { id: 'potenza_fv', name: 'Potenza impianto FV (kWp)', type: 'number', min: 0, step: 0.1 },
                 { id: 'capacita_accumulo', name: 'Capacità accumulo (kWh)', type: 'number', min: 0, step: 0.1 },
-                { id: 'registro_ue', name: 'Moduli FV iscritti al registro UE', type: 'select', options: ['No', 'Sì - Requisiti lett. a) (+5%)', 'Sì - Requisiti lett. b) (+10%)', 'Sì - Requisiti lett. c) (+15%)'] }
+                { id: 'registro_ue', name: 'Moduli FV iscritti al registro UE', type: 'select', options: ['No', 'Sì - Requisiti lett. a) (+5%)', 'Sì - Requisiti lett. b) (+10%)', 'Sì - Requisiti lett. c) (+15%)'] },
+                { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0, optional: true, help: 'Se fornito, verrà usato per confrontare con i massimali e determinare la spesa ammissibile.' }
             ],
-            calculate: (params, operatorType) => {
-                const { potenza_fv, capacita_accumulo, registro_ue } = params;
-                if (!potenza_fv || !capacita_accumulo) return 0;
-                
-                // Costo massimo ammissibile per FV (scalare per potenza)
-                let cmaxFV;
-                if (potenza_fv <= 20) cmaxFV = 1500;
-                else if (potenza_fv <= 200) cmaxFV = 1200;
-                else if (potenza_fv <= 600) cmaxFV = 1100;
-                else cmaxFV = 1050;
-                
-                const costoAmmissibileFV = potenza_fv * cmaxFV;
-                
-                // Costo massimo ammissibile per accumulo: 1000 €/kWh
-                const costoAmmissibileAccumulo = capacita_accumulo * 1000;
-                
-                // Percentuale base: 20%
-                let percentuale = 0.20;
-                
-                // Maggiorazioni per registro UE
-                if (registro_ue.includes('lett. a)')) percentuale += 0.05;
-                else if (registro_ue.includes('lett. b)')) percentuale += 0.10;
-                else if (registro_ue.includes('lett. c)')) percentuale += 0.15;
-                
-                const incentivo = percentuale * (costoAmmissibileFV + costoAmmissibileAccumulo);
-                
+            calculate: (params, operatorType, contextData) => {
+                const { potenza_fv, capacita_accumulo, registro_ue, costo_totale } = params;
+                const p = Number(potenza_fv || 0);
+                const k = Number(capacita_accumulo || 0);
+
+                if (p <= 0 && k <= 0) return 0;
+
+                // Massimali fissi richiesti: 1.500 €/kW (FV) e 1.000 €/kWh (accumulo)
+                const MASSIMALE_FV_PER_KW = 1500;
+                const MASSIMALE_ACCUMULO_PER_KWH = 1000;
+
+                // Calcolo massimali (per informazione). Registro UE non modifica il calcolo del tetto PV
+                let registroMultiplier = 0;
+                if (registro_ue && typeof registro_ue === 'string') {
+                    if (registro_ue.includes('lett. a)')) registroMultiplier = 0.05;
+                    else if (registro_ue.includes('lett. b)')) registroMultiplier = 0.10;
+                    else if (registro_ue.includes('lett. c)')) registroMultiplier = 0.15;
+                }
+
+                const massimaleFV = p * MASSIMALE_FV_PER_KW * (1 + registroMultiplier);
+                const massimaleAccumulo = k * MASSIMALE_ACCUMULO_PER_KWH;
+                const totaleMassimali = massimaleFV + massimaleAccumulo;
+
+                // Percentuale riconosciuta: 30% (salvo Art.48-ter / piccolo comune => 100%)
+                const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
+                const isPiccoloComune = contextData?.is_comune === true && contextData?.is_edificio_comunale === true && contextData?.is_piccolo_comune === true && contextData?.subjectType === 'pa';
+                const percentualeApplicata = (isArt48ter || isPiccoloComune) ? 1.0 : 0.30;
+
+                // Spesa totale usata per il calcolo: preferiamo il costo reale se fornito, altrimenti stimiamo dalla somma delle componenti
+                let spesaTotale = (typeof costo_totale === 'number' && !isNaN(costo_totale) && costo_totale > 0) ? costo_totale : (p * MASSIMALE_FV_PER_KW + k * MASSIMALE_ACCUMULO_PER_KWH);
+
+                // Vincolo specifico richiesto: Incentivo = min[30% × SpesaTotale, 30% × (Potenza kW × 1.500 €/kW)]
+                // Si applica la percentuale calcolata (30% o 100% per Art.48-ter / Piccolo Comune)
+                const capPv = p * MASSIMALE_FV_PER_KW; // secondo formula richiesta
+                const incentivo = percentualeApplicata * Math.min(spesaTotale, capPv);
+
                 return incentivo;
             },
-            explain: (params) => {
-                const { potenza_fv, capacita_accumulo, registro_ue } = params;
-                let cmaxFV; const p=potenza_fv||0; const k=capacita_accumulo||0;
-                if (p<=20) cmaxFV=1500; else if (p<=200) cmaxFV=1200; else if (p<=600) cmaxFV=1100; else cmaxFV=1050;
-                const costoAmmissibileFV=p*cmaxFV;
-                const costoAmmissibileAccumulo=k*1000;
-                let percentuale=0.20;
-                if (registro_ue?.includes('lett. a)')) percentuale+=0.05; else if (registro_ue?.includes('lett. b)')) percentuale+=0.10; else if (registro_ue?.includes('lett. c)')) percentuale+=0.15;
-                const base=percentuale*(costoAmmissibileFV+costoAmmissibileAccumulo);
-                return { result: base, formula:`Itot = ${percentuale*100}% × (min(C_FV, cmax_FV) + min(C_acc, 1000€/kWh))`, variables:{p_fv:p, cmax_fv:cmaxFV, costi_fv:costoAmmissibileFV, kwh_acc:k, cmax_acc_kwh:1000, costi_acc:costoAmmissibileAccumulo} };
+            explain: (params, operatorType, contextData) => {
+                const { potenza_fv, capacita_accumulo, registro_ue, costo_totale } = params;
+                const p = Number(potenza_fv || 0);
+                const k = Number(capacita_accumulo || 0);
+
+                const steps = [];
+
+                // Cmax per fascia
+                let cmaxFVPerkW;
+                if (p <= 20) cmaxFVPerkW = 1500;
+                else if (p <= 200) cmaxFVPerkW = 1200;
+                else if (p <= 600) cmaxFVPerkW = 1100;
+                else cmaxFVPerkW = 1050;
+
+                // Registro UE aumenta i massimali (non la percentuale)
+                let registroMultiplier = 0;
+                let registroNote = 'Nessun incremento per registro UE';
+                if (registro_ue && typeof registro_ue === 'string') {
+                    if (registro_ue.includes('lett. a)')) { registroMultiplier = 0.05; registroNote = 'Incremento massimali +5% (lett. a)'; }
+                    else if (registro_ue.includes('lett. b)')) { registroMultiplier = 0.10; registroNote = 'Incremento massimali +10% (lett. b)'; }
+                    else if (registro_ue.includes('lett. c)')) { registroMultiplier = 0.15; registroNote = 'Incremento massimali +15% (lett. c)'; }
+                }
+
+                const effectiveCmaxFVPerkW = cmaxFVPerkW * (1 + registroMultiplier);
+                const massimaleFV = p * effectiveCmaxFVPerkW;
+                const massimaleAccumulo = k * 1000;
+                const totaleMassimali = massimaleFV + massimaleAccumulo;
+
+                const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
+                const isPiccoloComune = contextData?.is_comune === true && contextData?.is_edificio_comunale === true && contextData?.is_piccolo_comune === true && contextData?.subjectType === 'pa';
+                const percentualeApplicata = (isArt48ter || isPiccoloComune) ? 1.0 : 0.30;
+                const pDesc = (percentualeApplicata === 1.0) ? '100% (Art.48-ter / Comune <15k)' : '30% (Titolo 2H standard)';
+
+                // Costruzione dei passi esplicativi
+                steps.push(`Potenza FV (kWp): ${p}`);
+                steps.push(`Capacità accumulo (kWh): ${k}`);
+                steps.push(`Massimale FV (€/kW): 1500`);
+                steps.push(`Massimale accumulo (€/kWh): 1000`);
+                if (registroMultiplier > 0) steps.push(registroNote + ` (applicato ai massimali: +${(registroMultiplier*100).toFixed(0)}%)`);
+
+                // Calcolo dettagliato: consideriamo i massimali e il costo fornito (se presente)
+                let costoAmmissibile = totaleMassimali;
+                if (typeof costo_totale === 'number' && !isNaN(costo_totale) && costo_totale > 0) {
+                    costoAmmissibile = costo_totale;
+                }
+
+                const spesaUsataFinale = Math.min(costoAmmissibile, totaleMassimali);
+
+                // Dettagli per i passi esplicativi
+                steps.push(`Potenza FV = ${p} kWp`);
+                steps.push(`Cmax base FV = ${cmaxFVPerkW} €/kWp`);
+                if (registroMultiplier) steps.push(`Registro UE: ${registroNote} → Cmax effettivo FV = ${effectiveCmaxFVPerkW.toFixed(2)} €/kWp`);
+                steps.push(`Massimale FV = Potenza × Cmax_eff = ${p} × ${effectiveCmaxFVPerkW.toFixed(2)} = ${massimaleFV.toLocaleString('it-IT')} €`);
+                steps.push(`Massimale accumulo = ${k} kWh × 1000 €/kWh = ${massimaleAccumulo.toLocaleString('it-IT')} €`);
+                steps.push(`Totale massimali = ${totaleMassimali.toLocaleString('it-IT')} €`);
+                steps.push(typeof costo_totale === 'number' && costo_totale > 0 ? `Costo ammissibile fatturato fornito = ${costo_totale.toLocaleString('it-IT')} €` : `Nessun costo fatturato fornito; si assume spesa ammissibile = massimali`);
+                steps.push(`Spesa usata per calcolo = min(Costo ammissibile, Totale massimali) = ${spesaUsataFinale.toLocaleString('it-IT')} €`);
+                steps.push(`Percentuale applicata: ${pDesc}`);
+                steps.push(`Itot = p × Spesa usata = ${(percentualeApplicata*100).toFixed(0)}% × ${spesaUsataFinale.toLocaleString('it-IT')} = ${(percentualeApplicata*spesaUsataFinale).toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
+
+                // Requisiti tecnici e modalità di erogazione (informativi)
+                steps.push('Requisiti tecnici: moduli FV con rendimento ≥90% dopo 10 anni; inverter rendimento UE ≥97%.');
+                steps.push('Erogazione: pagamento in unica rata per importi ≤15.000 €; per importi >15.000 € possibili rate tra 2 e 5 anni.');
+
+                const incentivo = percentualeApplicata * spesaUsataFinale;
+
+                return {
+                    result: incentivo,
+                    formula: `Itot = p × min(CostoAmmissibile, TotaleMassimali)`,
+                    variables: {
+                        potenza_fv: p,
+                        capacita_accumulo_kWh: k,
+                        cmax_fv_per_kWp: cmaxFVPerkW,
+                        effective_cmax_fv_per_kWp: effectiveCmaxFVPerkW,
+                        massimaleFV: massimaleFV,
+                        massimaleAccumulo: massimaleAccumulo,
+                        totaleMassimali: totaleMassimali,
+                        costoAmmissibileFatturato: (typeof costo_totale === 'number' ? costo_totale : null),
+                        spesaUsata: spesaUsataFinale,
+                        p: percentualeApplicata,
+                        pDesc: pDesc,
+                        registro_ue: registro_ue || null
+                    },
+                    steps
+                };
             }
         },
 

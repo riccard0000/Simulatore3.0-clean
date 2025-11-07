@@ -1188,7 +1188,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             description: 'Art. 5, comma 1, lett. g) - Realizzazione di infrastrutture per la ricarica di veicoli elettrici presso edifici pubblici o ad uso terziario per promuovere la mobilità sostenibile.',
             category: 'Efficienza Energetica',
                 allowedOperators: ['pa', 'private_tertiary_person', 'private_tertiary_small', 'private_tertiary_medium', 'private_tertiary_large'],
-                restrictionNote: 'SOLO per PA/ETS non economici e Soggetti Privati su edifici TERZIARIO. NO ambito residenziale. Deve essere congiunto a installazione pompa di calore elettrica.',
+                restrictionNote: 'SOLO per PA/ETS non economici e Soggetti Privati su edifici TERZIARIO. NO ambito residenziale.',
             inputs: [
                 { id: 'tipo_infrastruttura', name: 'Tipo infrastruttura', type: 'select', options: ['Standard monofase (7.4-22kW)', 'Standard trifase (7.4-22kW)', 'Media (22-50kW)', 'Alta (50-100kW)', 'Oltre 100kW'] },
                 { 
@@ -1295,46 +1295,126 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             inputs: [
                 { id: 'potenza_fv', name: 'Potenza impianto FV (kWp)', type: 'number', min: 0, step: 0.1 },
                 { id: 'capacita_accumulo', name: 'Capacità accumulo (kWh)', type: 'number', min: 0, step: 0.1 },
-                { id: 'registro_ue', name: 'Moduli FV iscritti al registro UE', type: 'select', options: ['No', 'Sì - Requisiti lett. a) (+5%)', 'Sì - Requisiti lett. b) (+10%)', 'Sì - Requisiti lett. c) (+15%)'] }
+                { id: 'registro_ue', name: 'Moduli FV iscritti al registro UE', type: 'select', options: ['No', 'Sì - Requisiti lett. a) (+5%)', 'Sì - Requisiti lett. b) (+10%)', 'Sì - Requisiti lett. c) (+15%)'] },
+                { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0, optional: true, help: 'Se fornito, verrà usato per confrontare con i massimali e determinare la spesa ammissibile.' }
             ],
-            calculate: (params, operatorType) => {
-                const { potenza_fv, capacita_accumulo, registro_ue } = params;
-                if (!potenza_fv || !capacita_accumulo) return 0;
-                
-                // Costo massimo ammissibile per FV (scalare per potenza)
-                let cmaxFV;
-                if (potenza_fv <= 20) cmaxFV = 1500;
-                else if (potenza_fv <= 200) cmaxFV = 1200;
-                else if (potenza_fv <= 600) cmaxFV = 1100;
-                else cmaxFV = 1050;
-                
-                const costoAmmissibileFV = potenza_fv * cmaxFV;
-                
-                // Costo massimo ammissibile per accumulo: 1000 €/kWh
-                const costoAmmissibileAccumulo = capacita_accumulo * 1000;
-                
-                // Percentuale base: 20%
-                let percentuale = 0.20;
-                
-                // Maggiorazioni per registro UE
-                if (registro_ue.includes('lett. a)')) percentuale += 0.05;
-                else if (registro_ue.includes('lett. b)')) percentuale += 0.10;
-                else if (registro_ue.includes('lett. c)')) percentuale += 0.15;
-                
-                const incentivo = percentuale * (costoAmmissibileFV + costoAmmissibileAccumulo);
-                
+            calculate: (params, operatorType, contextData) => {
+                const { potenza_fv, capacita_accumulo, registro_ue, costo_totale } = params;
+                const p = Number(potenza_fv || 0);
+                const k = Number(capacita_accumulo || 0);
+                if (p <= 0 && k <= 0) return 0;
+
+                // Massimali fissi per calcolo: 1500 €/kW (FV) e 1000 €/kWh (accumulo)
+                const MASSIMALE_FV_PER_KW = 1500;
+                const MASSIMALE_ACCUMULO_PER_KWH = 1000;
+
+                // Registro UE è informativo e può aumentare i massimali per report, ma
+                // la formula richiesta per il calcolo usa il cap PV = potenza × 1500 €/kW
+                let registroAdd = 0;
+                if (registro_ue && typeof registro_ue === 'string') {
+                    if (registro_ue.includes('lett. a)')) registroAdd = 0.05;
+                    else if (registro_ue.includes('lett. b)')) registroAdd = 0.10;
+                    else if (registro_ue.includes('lett. c)')) registroAdd = 0.15;
+                }
+
+                const massimaleFV = p * MASSIMALE_FV_PER_KW * (1 + registroAdd);
+                const massimaleAccumulo = k * MASSIMALE_ACCUMULO_PER_KWH;
+                const totaleAmmissibile = massimaleFV + massimaleAccumulo;
+
+                // Percentuale riconosciuta: 30% (salvo Art.48-ter / piccolo comune => 100%)
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'fotovoltaico-accumulo');
+                const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
+                const isPiccoloComune = contextData?.is_comune === true && contextData?.is_edificio_comunale === true && contextData?.is_piccolo_comune === true && contextData?.subjectType === 'pa';
+                const percentualeApplicata = (isArt48ter || isPiccoloComune) ? 1.0 : 0.30;
+
+                // Spesa totale: preferiamo il costo reale se fornito, altrimenti stimiamo dalla somma delle componenti
+                const spesaTotale = (typeof costo_totale === 'number' && !isNaN(costo_totale) && costo_totale > 0)
+                    ? costo_totale
+                    : (p * MASSIMALE_FV_PER_KW + k * MASSIMALE_ACCUMULO_PER_KWH);
+
+                // Formula richiesta: Incentivo = min[30% × SpesaTotale, 30% × (Potenza kW × 1.500 €/kW)]
+                const capPv = p * MASSIMALE_FV_PER_KW;
+                const incentivo = percentualeApplicata * Math.min(spesaTotale, capPv);
+
                 return incentivo;
             },
-            explain: (params) => {
-                const { potenza_fv, capacita_accumulo, registro_ue } = params;
-                let cmaxFV; const p=potenza_fv||0; const k=capacita_accumulo||0;
-                if (p<=20) cmaxFV=1500; else if (p<=200) cmaxFV=1200; else if (p<=600) cmaxFV=1100; else cmaxFV=1050;
-                const costoAmmissibileFV=p*cmaxFV;
-                const costoAmmissibileAccumulo=k*1000;
-                let percentuale=0.20;
-                if (registro_ue?.includes('lett. a)')) percentuale+=0.05; else if (registro_ue?.includes('lett. b)')) percentuale+=0.10; else if (registro_ue?.includes('lett. c)')) percentuale+=0.15;
-                const base=percentuale*(costoAmmissibileFV+costoAmmissibileAccumulo);
-                return { result: base, formula:`Itot = ${percentuale*100}% × (min(C_FV, cmax_FV) + min(C_acc, 1000€/kWh))`, variables:{p_fv:p, cmax_fv:cmaxFV, costi_fv:costoAmmissibileFV, kwh_acc:k, cmax_acc_kwh:1000, costi_acc:costoAmmissibileAccumulo} };
+            explain: (params, operatorType, contextData) => {
+                const { potenza_fv, capacita_accumulo, registro_ue, costo_totale } = params;
+                const p = Number(potenza_fv || 0);
+                const k = Number(capacita_accumulo || 0);
+
+                // Determina cmax per fascia di potenza
+                let cmaxFV;
+                if (p <= 20) cmaxFV = 1500;
+                else if (p <= 200) cmaxFV = 1200;
+                else if (p <= 600) cmaxFV = 1100;
+                else cmaxFV = 1050;
+
+                const costoAmmissibileFV = p * cmaxFV;
+                const costoAmmissibileAccumulo = k * 1000;
+                const totaleAmmissibile = costoAmmissibileFV + costoAmmissibileAccumulo;
+
+                // Base percentuale dal determinatore centralizzato
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'fotovoltaico-accumulo');
+                const basePercentuale = det.p || 0;
+
+                // Registro UE add-on
+                let registroAdd = 0;
+                let registroNote = 'No registro UE selezionato';
+                if (registro_ue && typeof registro_ue === 'string') {
+                    if (registro_ue.includes('lett. a)')) { registroAdd = 0.05; registroNote = 'Registro UE lett. a) (+5%)'; }
+                    else if (registro_ue.includes('lett. b)')) { registroAdd = 0.10; registroNote = 'Registro UE lett. b) (+10%)'; }
+                    else if (registro_ue.includes('lett. c)')) { registroAdd = 0.15; registroNote = 'Registro UE lett. c) (+15%)'; }
+                }
+
+                const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
+                const isPiccoloComune = contextData?.is_comune === true && contextData?.is_edificio_comunale === true && contextData?.is_piccolo_comune === true && contextData?.subjectType === 'pa';
+                const percentualeApplicata = (isArt48ter || isPiccoloComune) ? 1.0 : 0.30;
+                const pDesc = (percentualeApplicata === 1.0) ? '100% (Art.48-ter / Comune <15k)' : '30% (Titolo 2H standard)';
+
+                // Spesa totale considerata (preferiamo costo reale, altrimenti stima)
+                const costoAmmissibile = (typeof costo_totale === 'number' && !isNaN(costo_totale) && costo_totale > 0)
+                    ? costo_totale
+                    : (p * 1500 + k * 1000);
+
+                const steps = [];
+                steps.push(`Potenza FV (kWp): ${p}`);
+                steps.push(`Capacità accumulo (kWh): ${k}`);
+                steps.push(`Massimale FV (€/kW): 1500`);
+                steps.push(`Massimale accumulo (€/kWh): 1000`);
+                if (registroAdd > 0) steps.push(`Registro UE: ${registro_ue} (aumenta massimali di ${(registroAdd*100).toFixed(0)}%)`);
+                steps.push(`Spesa totale considerata: ${costoAmmissibile.toLocaleString('it-IT', {minimumFractionDigits:2})} €`);
+
+                // Calcolo secondo formula: Incentivo = min[30%×SpesaTotale, 30%×(Potenza×1.500€)]
+                const capPv = p * 1500;
+                steps.push(`Cap PV per calcolo = Potenza × 1.500 €/kW = ${p} × 1500 = ${capPv.toLocaleString('it-IT')} €`);
+                const spesaUsata = Math.min(costoAmmissibile, capPv);
+                const incentivo = percentualeApplicata * spesaUsata;
+                steps.push(`Spesa usata per incentivo = min(SpesaTotale, Cap PV) = ${spesaUsata.toLocaleString('it-IT')} €`);
+                steps.push(`Percentuale applicata: ${pDesc}`);
+                steps.push(`Itot = p × Spesa usata = ${percentualeApplicata.toFixed(2)} × ${spesaUsata.toLocaleString('it-IT')} = ${incentivo.toLocaleString('it-IT', {minimumFractionDigits:2})} €`);
+                steps.push('Requisiti tecnici: moduli FV con rendimento ≥90% dopo 10 anni; inverter rendimento UE ≥97%.');
+                steps.push('Erogazione: pagamento in unica rata per importi ≤15.000 €; per importi >15.000 € possibili rate tra 2 e 5 anni.');
+                // Ritorniamo il report esplicativo
+                return {
+                    result: incentivo,
+                    formula: `Itot = p × Spesa_usata, con Spesa_usata = min(SpesaTotale, Cap_PV)` ,
+                    variables: {
+                        potenza_fv: p,
+                        capacita_accumulo_kWh: k,
+                        massimaleFV_per_kW: 1500,
+                        massimaleAccumulo_per_kWh: 1000,
+                        costoAmmissibileFV: costoAmmissibileFV,
+                        costoAmmissibileAccumulo: costoAmmissibileAccumulo,
+                        totaleAmmissibile: totaleAmmissibile,
+                        costo_totale_fornito: (typeof costo_totale === 'number' ? costo_totale : null),
+                        spesaUsata: spesaUsata,
+                        p: percentualeApplicata,
+                        pDesc: pDesc,
+                        registro_ue: registro_ue || null
+                    },
+                    steps
+                };
             }
         },
 
