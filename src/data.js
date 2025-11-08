@@ -1304,12 +1304,19 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const k = Number(capacita_accumulo || 0);
                 if (p <= 0 && k <= 0) return 0;
 
-                // Massimali fissi per calcolo: 1500 €/kW (FV) e 1000 €/kWh (accumulo)
-                const MASSIMALE_FV_PER_KW = 1500;
-                const MASSIMALE_ACCUMULO_PER_KWH = 1000;
+                // Cmax PV per fasce (€/kW) come da requisito: 1500 / 1200 / 1100 / 1050
+                let cmaxFVPerkW;
+                if (p <= 20) cmaxFVPerkW = 1500;
+                else if (p <= 200) cmaxFVPerkW = 1200;
+                else if (p <= 600) cmaxFVPerkW = 1100;
+                else if (p <= 1000) cmaxFVPerkW = 1050;
+                else cmaxFVPerkW = 1050;
 
-                // Registro UE è informativo e può aumentare i massimali per report, ma
-                // la formula richiesta per il calcolo usa il cap PV = potenza × 1500 €/kW
+                const massimaleFV = p * cmaxFVPerkW;
+                const massimaleAccumulo = k * 1000; // 1000 €/kWh
+                const totaleAmmissibile = massimaleFV + massimaleAccumulo;
+
+                // Registro UE incrementa la percentuale (non i massimali)
                 let registroAdd = 0;
                 if (registro_ue && typeof registro_ue === 'string') {
                     if (registro_ue.includes('lett. a)')) registroAdd = 0.05;
@@ -1317,24 +1324,20 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     else if (registro_ue.includes('lett. c)')) registroAdd = 0.15;
                 }
 
-                const massimaleFV = p * MASSIMALE_FV_PER_KW * (1 + registroAdd);
-                const massimaleAccumulo = k * MASSIMALE_ACCUMULO_PER_KWH;
-                const totaleAmmissibile = massimaleFV + massimaleAccumulo;
-
-                // Percentuale riconosciuta: 30% (salvo Art.48-ter / piccolo comune => 100%)
-                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'fotovoltaico-accumulo');
+                // Base percentuale per 1.H = 20% salvo Art.48-ter / piccolo comune => 100%
                 const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
                 const isPiccoloComune = contextData?.is_comune === true && contextData?.is_edificio_comunale === true && contextData?.is_piccolo_comune === true && contextData?.subjectType === 'pa';
-                const percentualeApplicata = (isArt48ter || isPiccoloComune) ? 1.0 : 0.30;
+                const basePercentuale = (isArt48ter || isPiccoloComune) ? 1.0 : 0.20;
+                const percentualeApplicata = (isArt48ter || isPiccoloComune) ? 1.0 : (basePercentuale + registroAdd);
 
-                // Spesa totale: preferiamo il costo reale se fornito, altrimenti stimiamo dalla somma delle componenti
+                // Spesa totale: preferiamo il costo reale se fornito, altrimenti i massimali stimati
                 const spesaTotale = (typeof costo_totale === 'number' && !isNaN(costo_totale) && costo_totale > 0)
                     ? costo_totale
-                    : (p * MASSIMALE_FV_PER_KW + k * MASSIMALE_ACCUMULO_PER_KWH);
+                    : totaleAmmissibile;
 
-                // Formula richiesta: Incentivo = min[30% × SpesaTotale, 30% × (Potenza kW × 1.500 €/kW)]
-                const capPv = p * MASSIMALE_FV_PER_KW;
-                const incentivo = percentualeApplicata * Math.min(spesaTotale, capPv);
+                // Incentivo = percentualeApplicata × min(SpesaTotale, TotaleAmmissibile)
+                const spesaUsata = Math.min(spesaTotale, totaleAmmissibile);
+                const incentivo = percentualeApplicata * spesaUsata;
 
                 return incentivo;
             },
@@ -1354,9 +1357,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const costoAmmissibileAccumulo = k * 1000;
                 const totaleAmmissibile = costoAmmissibileFV + costoAmmissibileAccumulo;
 
-                // Base percentuale dal determinatore centralizzato
-                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'fotovoltaico-accumulo');
-                const basePercentuale = det.p || 0;
+                // Per 1.H usiamo la base percentuale normativa (20%) e registro incrementa i punti percentuali
 
                 // Registro UE add-on
                 let registroAdd = 0;
@@ -1369,28 +1370,28 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                 const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
                 const isPiccoloComune = contextData?.is_comune === true && contextData?.is_edificio_comunale === true && contextData?.is_piccolo_comune === true && contextData?.subjectType === 'pa';
-                const percentualeApplicata = (isArt48ter || isPiccoloComune) ? 1.0 : 0.30;
-                const pDesc = (percentualeApplicata === 1.0) ? '100% (Art.48-ter / Comune <15k)' : '30% (Titolo 2H standard)';
+                const basePercentuale = (isArt48ter || isPiccoloComune) ? 1.0 : 0.20;
+                const percentualeApplicata = (isArt48ter || isPiccoloComune) ? 1.0 : (basePercentuale + registroAdd);
+                const pDesc = (percentualeApplicata === 1.0) ? '100% (Art.48-ter / Comune <15k)' : `${((basePercentuale+registroAdd)*100).toFixed(0)}% (base 20% + registro)`;
 
-                // Spesa totale considerata (preferiamo costo reale, altrimenti stima)
+                // Spesa totale considerata (preferiamo costo reale, altrimenti tot massimali)
                 const costoAmmissibile = (typeof costo_totale === 'number' && !isNaN(costo_totale) && costo_totale > 0)
                     ? costo_totale
-                    : (p * 1500 + k * 1000);
+                    : totaleAmmissibile;
 
                 const steps = [];
                 steps.push(`Potenza FV (kWp): ${p}`);
                 steps.push(`Capacità accumulo (kWh): ${k}`);
-                steps.push(`Massimale FV (€/kW): 1500`);
+                steps.push(`Massimale FV (€/kW) usato per calcolo: ${cmaxFV}`);
                 steps.push(`Massimale accumulo (€/kWh): 1000`);
-                if (registroAdd > 0) steps.push(`Registro UE: ${registro_ue} (aumenta massimali di ${(registroAdd*100).toFixed(0)}%)`);
+                if (registroAdd > 0) steps.push(`Registro UE: ${registro_ue} (incrementa la percentuale di ${(registroAdd*100).toFixed(0)} punti percentuali)`);
                 steps.push(`Spesa totale considerata: ${costoAmmissibile.toLocaleString('it-IT', {minimumFractionDigits:2})} €`);
 
-                // Calcolo secondo formula: Incentivo = min[30%×SpesaTotale, 30%×(Potenza×1.500€)]
-                const capPv = p * 1500;
-                steps.push(`Cap PV per calcolo = Potenza × 1.500 €/kW = ${p} × 1500 = ${capPv.toLocaleString('it-IT')} €`);
-                const spesaUsata = Math.min(costoAmmissibile, capPv);
+                // Calcolo: Incentivo = percentualeApplicata × min(SpesaTotale, TotaleAmmissibile)
+                steps.push(`Totale massimali (FV+accumulo) = ${totaleAmmissibile.toLocaleString('it-IT')} €`);
+                const spesaUsata = Math.min(costoAmmissibile, totaleAmmissibile);
                 const incentivo = percentualeApplicata * spesaUsata;
-                steps.push(`Spesa usata per incentivo = min(SpesaTotale, Cap PV) = ${spesaUsata.toLocaleString('it-IT')} €`);
+                steps.push(`Spesa usata per incentivo = min(SpesaTotale, TotaleMassimali) = ${spesaUsata.toLocaleString('it-IT')} €`);
                 steps.push(`Percentuale applicata: ${pDesc}`);
                 steps.push(`Itot = p × Spesa usata = ${percentualeApplicata.toFixed(2)} × ${spesaUsata.toLocaleString('it-IT')} = ${incentivo.toLocaleString('it-IT', {minimumFractionDigits:2})} €`);
                 steps.push('Requisiti tecnici: moduli FV con rendimento ≥90% dopo 10 anni; inverter rendimento UE ≥97%.');
@@ -1402,7 +1403,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     variables: {
                         potenza_fv: p,
                         capacita_accumulo_kWh: k,
-                        massimaleFV_per_kW: 1500,
+                        massimaleFV_per_kW: cmaxFV,
                         massimaleAccumulo_per_kWh: 1000,
                         costoAmmissibileFV: costoAmmissibileFV,
                         costoAmmissibileAccumulo: costoAmmissibileAccumulo,
