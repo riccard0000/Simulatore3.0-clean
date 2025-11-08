@@ -381,12 +381,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 shows: ['is_edificio_comunale'] // Mostra il campo successivo solo se checked
             },
             {
-                        // Enforce regulatory cap: no incentives for potenze > 1000 kWp
-                        if (p > 1000) return 0;
-                        if (p <= 20) cmaxFVPerkW = 1500;
-                        else if (p <= 200) cmaxFVPerkW = 1200;
-                        else if (p <= 600) cmaxFVPerkW = 1100;
-                        else /* p <= 1000 */ cmaxFVPerkW = 1050;
+                id: 'is_edificio_comunale',
+                name: 'L\'edificio è di proprietà del Comune ed è utilizzato dallo stesso Comune?',
+                type: 'checkbox',
+                help: 'Entrambe le condizioni devono essere vere: proprietà comunale E utilizzo da parte del Comune',
+                optional: true,
                 affects_incentive: false,
                 visible_if: { field: 'is_comune', value: true },
                 shows: ['is_piccolo_comune']
