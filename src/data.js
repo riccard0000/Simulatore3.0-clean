@@ -1293,7 +1293,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 allowedOperators: ['pa', 'private_tertiary_person', 'private_tertiary_small', 'private_tertiary_medium', 'private_tertiary_large'],
                 restrictionNote: 'SOLO per PA/ETS non economici e Soggetti Privati su edifici TERZIARIO. NO ambito residenziale. Deve essere congiunto a installazione pompa di calore elettrica.',
             inputs: [
-                { id: 'potenza_fv', name: 'Potenza impianto FV (kWp)', type: 'number', min: 0, step: 0.1 },
+                { id: 'potenza_fv', name: 'Potenza impianto FV (kWp)', type: 'number', min: 0, max: 1000, step: 0.1 },
                 { id: 'capacita_accumulo', name: 'Capacità accumulo (kWh)', type: 'number', min: 0, step: 0.1 },
                 { id: 'registro_ue', name: 'Moduli FV iscritti al registro UE', type: 'select', options: ['No', 'Sì - Requisiti lett. a) (+5%)', 'Sì - Requisiti lett. b) (+10%)', 'Sì - Requisiti lett. c) (+15%)'] },
                 { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0, optional: true, help: 'Se fornito, verrà usato per confrontare con i massimali e determinare la spesa ammissibile.' }
@@ -1305,12 +1305,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 if (p <= 0 && k <= 0) return 0;
 
                 // Cmax PV per fasce (€/kW) come da requisito: 1500 / 1200 / 1100 / 1050
+                // Enforce regulatory cap: no incentives for potenze > 1000 kWp
+                if (p > 1000) return 0;
                 let cmaxFVPerkW;
                 if (p <= 20) cmaxFVPerkW = 1500;
                 else if (p <= 200) cmaxFVPerkW = 1200;
                 else if (p <= 600) cmaxFVPerkW = 1100;
-                else if (p <= 1000) cmaxFVPerkW = 1050;
-                else cmaxFVPerkW = 1050;
+                else /* p <= 1000 */ cmaxFVPerkW = 1050;
 
                 const massimaleFV = p * cmaxFVPerkW;
                 const massimaleAccumulo = k * 1000; // 1000 €/kWh
@@ -1347,11 +1348,17 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const k = Number(capacita_accumulo || 0);
 
                 // Determina cmax per fascia di potenza
+                // Enforce regulatory cap: no incentives for potenze > 1000 kWp
+                if (p > 1000) {
+                    const stepsInvalid = [`Valore inserito per potenza FV (${p} kWp) eccede il limite normativo di 1000 kWp.`, 'Nessun incentivo disponibile per potenze > 1000 kWp.'];
+                    return { result: 0, formula: 'N/A', variables: { potenza_fv: p, capacita_accumulo_kWh: k }, steps: stepsInvalid };
+                }
+
                 let cmaxFV;
                 if (p <= 20) cmaxFV = 1500;
                 else if (p <= 200) cmaxFV = 1200;
                 else if (p <= 600) cmaxFV = 1100;
-                else cmaxFV = 1050;
+                else /* p <= 1000 */ cmaxFV = 1050;
 
                 const costoAmmissibileFV = p * cmaxFV;
                 const costoAmmissibileAccumulo = k * 1000;
@@ -2068,8 +2075,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 'nzeb',
                 'illuminazione-led',
                 'building-automation',
-                'infrastrutture-ricarica',
-                'fotovoltaico-accumulo'
+                'infrastrutture-ricarica'
             ],
             requiresDocumentation: 'Attestazione ufficiale che certifica la produzione europea dei componenti',
             isApplicable: (selectedInterventions) => {
