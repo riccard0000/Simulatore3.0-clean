@@ -1045,7 +1045,45 @@ async function initCalculator() {
                     
                     inputEl.addEventListener('change', handleInputChange);
                     inputEl.addEventListener('keyup', handleInputChange);
-                    
+
+                    // Se il campo è numerico e dichiara un max, comportamenti speciali per alcuni campi
+                    if (input.type === 'number' && input.max !== undefined) {
+                        if (intId === 'fotovoltaico-accumulo' && input.id === 'potenza_fv') {
+                            inputEl.placeholder = `Max: ${input.max} kWp`;
+                            inputEl.addEventListener('input', (e) => {
+                                const raw = e.target.value;
+                                const num = parseFloat(raw);
+                                if (!isNaN(num) && num > input.max) {
+                                        if (!state.inputValues[intId]) state.inputValues[intId] = {};
+                                        state.inputValues[intId][input.id] = null;
+                                        e.target.classList.add('invalid');
+                                        e.target.setCustomValidity(`Valore massimo ammesso: ${input.max}`);
+                                    } else {
+                                        e.target.classList.remove('invalid');
+                                        e.target.setCustomValidity('');
+                                    }
+                            });
+                            const sv = state.inputValues[intId] && state.inputValues[intId][input.id];
+                            if (sv !== undefined && sv !== null && !isNaN(Number(sv)) && Number(sv) > input.max) {
+                                state.inputValues[intId][input.id] = null;
+                                inputEl.classList.add('invalid');
+                                inputEl.setCustomValidity(`Valore massimo ammesso: ${input.max}`);
+                            }
+                        } else {
+                            inputEl.addEventListener('input', (e) => {
+                                const raw = e.target.value;
+                                const num = parseFloat(raw);
+                                if (!isNaN(num) && num > input.max) {
+                                    e.target.value = input.max;
+                                    if (!state.inputValues[intId]) state.inputValues[intId] = {};
+                                    state.inputValues[intId][input.id] = input.max;
+                                    e.target.classList.add('clamped-max');
+                                    setTimeout(() => e.target.classList.remove('clamped-max'), 900);
+                                }
+                            });
+                        }
+                    }
+
                     // Aggiungi classe per campi obbligatori
                     inputEl.classList.add('required-field');
                 }
@@ -1247,13 +1285,12 @@ async function initCalculator() {
                             case 'Oltre 100kW': currentMaxCost = 110000; break;
                         }
                         if (currentMaxCost && val > currentMaxCost) {
-                            this.style.borderColor = '#d32f2f';
-                            this.style.backgroundColor = '#ffebee';
-                            this.setCustomValidity(`La spesa non può superare ${Math.round(currentMaxCost).toLocaleString('it-IT')} € (limite normativo)`);
+                            // Non bloccare il form: mostriamo solo un avviso visivo non bloccante
+                            this.classList.add('max-warning');
+                            this.title = `La spesa supera il massimale indicativo: ${Math.round(currentMaxCost).toLocaleString('it-IT')} €`;
                         } else {
-                            this.style.borderColor = '';
-                            this.style.backgroundColor = '';
-                            this.setCustomValidity('');
+                            this.classList.remove('max-warning');
+                            this.title = `Spesa massima ammissibile: ${Math.round(currentMaxCost).toLocaleString('it-IT')} €`;
                         }
                     });
                 }
@@ -1279,7 +1316,18 @@ async function initCalculator() {
             return;
         }
         const value = e.target.type === 'number' ? parseFloat(e.target.value) : e.target.value;
-        state.inputValues[intervention][inputId] = value;
+        const meta = calculatorData.interventions?.[intervention]?.inputs?.find(i => i.id === inputId);
+        if (e.target.type === 'number' && meta && meta.max !== undefined && intervention === 'fotovoltaico-accumulo' && inputId === 'potenza_fv' && !isNaN(value) && value > meta.max) {
+            if (!state.inputValues[intervention]) state.inputValues[intervention] = {};
+            state.inputValues[intervention][inputId] = null;
+            e.target.classList.add('invalid');
+            e.target.setCustomValidity(`Valore massimo ammesso: ${meta.max}`);
+        } else {
+            if (!state.inputValues[intervention]) state.inputValues[intervention] = {};
+            state.inputValues[intervention][inputId] = value;
+            e.target.classList.remove('invalid');
+            e.target.setCustomValidity('');
+        }
         
             // Se questo campo influenza la visibilità di altri campi, ricarica la UI
             const interventionData = calculatorData.interventions[intervention];

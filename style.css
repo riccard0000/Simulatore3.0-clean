@@ -558,3 +558,23 @@ input.invalid:focus, select.invalid:focus {
     background: #d32f2f;
 }
 
+
+/* Visual indicator quando un campo numerico viene "clampato" al valore massimo */
+.clamped-max {
+    border-color: #ffc107 !important; /* giallo amber */
+    box-shadow: 0 0 0 4px rgba(255, 193, 7, 0.12);
+    animation: clampFlash 0.9s ease-out;
+}
+
+@keyframes clampFlash {
+    0% { background-color: rgba(255, 243, 205, 0.9); }
+    60% { background-color: rgba(255, 243, 205, 0.45); }
+    100% { background-color: transparent; }
+}
+
+/* Non-blocking warning for values exceeding recommended maxima */
+.max-warning {
+    border-color: #ff9800 !important; /* amber/orange */
+    background-color: rgba(255, 152, 0, 0.06) !important;
+}
+

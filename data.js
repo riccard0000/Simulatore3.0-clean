@@ -291,10 +291,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         const hasUE = (params?.premiums && params.premiums['prodotti-ue']) || (contextData?.globalPremiums && contextData.globalPremiums.includes && contextData.globalPremiums.includes('prodotti-ue')) || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')) || false;
 
         // Art.48-ter check
-    const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
+        const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
 
         // Piccolo comune: applicazione semplificata (non richiediamo più implementationMode === 'direct')
         const isPiccoloComune = contextData?.is_comune === true && contextData?.is_edificio_comunale === true && contextData?.is_piccolo_comune === true && contextData?.subjectType === 'pa';
+        // Escludiamo alcuni interventi (1.G e 1.H) dall'effetto "Piccolo Comune" 100%
+        const piccoloComuneExclusions = ['infrastrutture-ricarica', 'fotovoltaico-accumulo'];
+        const isPiccoloComuneEffective = isPiccoloComune && !piccoloComuneExclusions.includes(interventionId);
 
         // Multi-intervento: valutiamo la combinazione (Titolo II 1.A/1.B con almeno uno di Titolo III 2.A/2.B/2.C/2.E)
         // Use a dynamic detection of Titolo III interventions to avoid brittle hard-coded lists.
@@ -313,12 +316,30 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         let p = 0.40;
         let pDesc = '40% (base)';
 
-        // Priorità: Art.48-ter o piccolo comune => 100%
+        // Special-case per 1.G: infrastrutture di ricarica -> base 30% (normativa Art.5.1.g)
+        if (interventionId === 'infrastrutture-ricarica') {
+            if (isArt48ter) {
+                p = 1.0;
+                const buildingNames = { 'tertiary_school': 'scuole', 'tertiary_hospital': 'ospedali' };
+                pDesc = `100% (Art. 48-ter: ${buildingNames[contextData.buildingSubcategory] || 'edifici speciali'})`;
+            } else {
+                p = 0.30;
+                pDesc = '30% (infrastrutture di ricarica - Art.5.1.g)';
+            }
+            // Se il premio UE fosse applicabile, lo applichiamo dopo (in genere non è applicato a 1.G)
+            if (hasUE) {
+                p = Math.min(1.0, +(p + 0.10).toFixed(2));
+                pDesc = `${Math.round(p*100)}% (incluso premio Prodotti UE)`;
+            }
+            return { p, pDesc };
+        }
+
+        // Priorità: Art.48-ter o (piccolo comune quando applicabile) => 100%
         if (isArt48ter) {
             p = 1.0;
             const buildingNames = { 'tertiary_school': 'scuole', 'tertiary_hospital': 'ospedali' };
             pDesc = `100% (Art. 48-ter: ${buildingNames[contextData.buildingSubcategory] || 'edifici speciali'})`;
-        } else if (isPiccoloComune) {
+        } else if (isPiccoloComuneEffective) {
             p = 1.0;
             pDesc = '100% (Comune < 15.000 abitanti)';
         } else {
@@ -1404,7 +1425,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
 
                 steps.push(`Percentuale incentivazione: ${percentualeDesc}`);
-                steps.push(ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${percentuale.toFixed(2)})` : `  Premio Prodotti UE: non applicato`);
+               // steps.push(ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${percentuale.toFixed(2)})` : `  Premio Prodotti UE: non applicato`);
                 steps.push(`---`);
 
                 switch(tipo_infrastruttura) {
@@ -1480,9 +1501,9 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                 // Percentuale base per questo intervento: 20% (salvo Art.48-ter / piccolo comune => 100%)
                 const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
-                const isPiccoloComune = contextData?.is_comune === true && contextData?.is_edificio_comunale === true && contextData?.is_piccolo_comune === true && contextData?.subjectType === 'pa';
-                const basePercentuale = (isArt48ter || isPiccoloComune) ? 1.0 : 0.20;
-                const percentualeApplicata = (isArt48ter || isPiccoloComune) ? 1.0 : (basePercentuale + registroAdd);
+                // Nota: per il fotovoltaico-accumulo NON applichiamo il 100% per i piccoli comuni; resta valido solo Art.48-ter
+                const basePercentuale = isArt48ter ? 1.0 : 0.20;
+                const percentualeApplicata = isArt48ter ? 1.0 : (basePercentuale + registroAdd);
 
                 // Spesa totale: preferiamo il costo reale se fornito, altrimenti stimiamo dalla somma delle componenti massimali
                 const spesaTotale = (typeof costo_totale === 'number' && !isNaN(costo_totale) && costo_totale > 0) ? costo_totale : totaleMassimali;
@@ -1521,29 +1542,29 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const totaleMassimali = massimaleFV + massimaleAccumulo;
 
                 const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
-                const isPiccoloComune = contextData?.is_comune === true && contextData?.is_edificio_comunale === true && contextData?.is_piccolo_comune === true && contextData?.subjectType === 'pa';
-                const basePercentuale = (isArt48ter || isPiccoloComune) ? 1.0 : 0.20;
-                const percentualeApplicata = (isArt48ter || isPiccoloComune) ? 1.0 : (basePercentuale + registroAdd);
-                const pDesc = (percentualeApplicata === 1.0) ? '100% (Art.48-ter / Comune <15k)' : `${((basePercentuale+registroAdd)*100).toFixed(0)}% (base 20% + registro)`;
+                // Piccolo comune non modifica la percentuale per 1.H nello explain; solo Art.48-ter imposta 100%
+                const basePercentuale = isArt48ter ? 1.0 : 0.20;
+                const percentualeApplicata = isArt48ter ? 1.0 : (basePercentuale + registroAdd);
+                const pDesc = (percentualeApplicata === 1.0) ? '100% (Art.48-ter)' : `${((basePercentuale+registroAdd)*100).toFixed(0)}% (base 20% + registro)`;
 
                 // Costruzione dei passi esplicativi
                 steps.push(`Potenza FV (kWp): ${p}`);
                 steps.push(`Capacità accumulo (kWh): ${k}`);
-                steps.push(`Massimale FV (€/kW) usato: ${cmaxFVPerkW}`);
+                steps.push(`Massimale FV (€/kW): ${cmaxFVPerkW}`);
                 steps.push(`Massimale accumulo (€/kWh): 1000`);
                 if (registroAdd > 0) steps.push(`Registro UE: ${registro_ue} (incrementa la percentuale di ${(registroAdd*100).toFixed(0)} punti percentuali)`);
 
                 // Spesa ammissibile considerata
-                const costoAmmissibile = (typeof costo_totale === 'number' && !isNaN(costo_totale) && costo_totale > 0) ? costo_totale : totaleMassimali;
-                const spesaUsataFinale = Math.min(costoAmmissibile, totaleMassimali);
+                const costoFatturato = (typeof costo_totale === 'number' && !isNaN(costo_totale) && costo_totale > 0) ? costo_totale : totaleMassimali;
+                const spesaUsataFinale = Math.min(costoFatturato, totaleMassimali);
 
                 // Dettagli per i passi esplicativi
-                steps.push(`Cmax base FV = ${cmaxFVPerkW} €/kWp`);
-                steps.push(`Massimale FV = Potenza × Cmax = ${p} × ${cmaxFVPerkW} = ${massimaleFV.toLocaleString('it-IT')} €`);
+                //steps.push(`Cmax base FV = ${cmaxFVPerkW} €/kWp`);
+                steps.push(`Massimale FV = ${p} × ${cmaxFVPerkW} = ${massimaleFV.toLocaleString('it-IT')} €`);
                 steps.push(`Massimale accumulo = ${k} kWh × 1000 €/kWh = ${massimaleAccumulo.toLocaleString('it-IT')} €`);
                 steps.push(`Totale massimali = ${totaleMassimali.toLocaleString('it-IT')} €`);
-                steps.push(typeof costo_totale === 'number' && costo_totale > 0 ? `Costo ammissibile fatturato fornito = ${costo_totale.toLocaleString('it-IT')} €` : `Nessun costo fatturato fornito; si assume spesa ammissibile = massimali`);
-                steps.push(`Spesa usata per calcolo = min(Costo ammissibile, Totale massimali) = ${spesaUsataFinale.toLocaleString('it-IT')} €`);
+                steps.push(typeof costo_totale === 'number' && costo_totale > 0 ? `Costo fatturato fornito = ${costo_totale.toLocaleString('it-IT')} €` : `Nessun costo fatturato fornito; si assume spesa ammissibile = massimali`);
+                steps.push(`Costo usata per calcolo = min(Costo fatturato, Totale massimali) = ${spesaUsataFinale.toLocaleString('it-IT')} €`);
                 steps.push(`Percentuale applicata: ${pDesc}`);
                 steps.push(`Itot = p × Spesa usata = ${percentualeApplicata.toFixed(2)} × ${spesaUsataFinale.toLocaleString('it-IT')} = ${(percentualeApplicata*spesaUsataFinale).toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
 
@@ -1555,17 +1576,17 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                 return {
                     result: incentivo,
-                    formula: `Itot = p × min(CostoAmmissibile, TotaleMassimali)`,
+                    formula: `Itot = p × min(costoFatturato, TotaleMassimali)`,
                     variables: {
                         potenza_fv: p,
                         capacita_accumulo_kWh: k,
-                        cmax_fv_per_kWp: cmaxFVPerkW,
-                        effective_cmax_fv_per_kWp: cmaxFVPerkW,
-                        massimaleFV: massimaleFV,
-                        massimaleAccumulo: massimaleAccumulo,
-                        totaleMassimali: totaleMassimali,
-                        costoAmmissibileFatturato: (typeof costo_totale === 'number' ? costo_totale : null),
-                        spesaUsata: spesaUsataFinale,
+                        costo_massimo_ammissibile_fv: cmaxFVPerkW,
+                        costo_massimo_ammissibile_accumulo: 1000,
+                       // massimaleFV: massimaleFV,
+                       // massimaleAccumulo: massimaleAccumulo,
+                       // totaleMassimali: totaleMassimali,
+                        costo_Fatturato: (typeof costo_totale === 'number' ? costo_totale : null),
+                       // spesaUsata: spesaUsataFinale,
                         p: percentualeApplicata,
                         pDesc: pDesc,
                         registro_ue: registro_ue || null
@@ -2213,8 +2234,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 'schermature-solari',
                 'nzeb',
                 'illuminazione-led',
-                'building-automation',
-                'infrastrutture-ricarica'
+                'building-automation'
             ],
             requiresDocumentation: 'Attestazione ufficiale che certifica la produzione europea dei componenti',
             isApplicable: (selectedInterventions) => {
@@ -2226,7 +2246,6 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     'nzeb',
                     'illuminazione-led',
                     'building-automation',
-                    'infrastrutture-ricarica',
                     'fotovoltaico-accumulo'
                 ];
                 return selectedInterventions.some(int => eligibleInterventions.includes(int));
@@ -2280,9 +2299,12 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         const hasIncentivo100 = isArt48ter || isPiccoloComune;
 
         if (hasIncentivo100) {
-            // Modalità speciale: incentivo = 100% spesa sostenuta, max = Imas calcolato
+            // Modalità speciale (parziale): applichiamo incentivo 100% solo alle tipologie ammissibili.
+            const piccoloComuneExclusions = ['infrastrutture-ricarica', 'fotovoltaico-accumulo'];
             let totalCost = 0;
             let totalImas = 0;
+            let applied100Total = 0;
+            let applied100Count = 0;
 
             selectedInterventions.forEach(intId => {
                 const intervention = this.interventions[intId];
@@ -2299,29 +2321,19 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 }
 
                 const params = inputsByIntervention[intId] || {};
-                
-                // Calcola o estrai il costo totale
                 let costInput = params.costo_totale || params.spesa_totale || params.costo_intervento || 0;
-                
-                // Se non specificato, prova a calcolarlo dai parametri specifici
                 if (!costInput) {
                     if (Array.isArray(params.righe_opache) && params.righe_opache.length > 0) {
-                        // Isolamento 1.A con tabella: somma dei costi riga
                         costInput = params.righe_opache.reduce((sum, r) => sum + (parseFloat(r.costo_totale) || 0), 0);
                     } else if (params.superficie && params.costo_specifico) {
-                        // Per interventi a singolo input: superficie × costo
                         costInput = params.superficie * params.costo_specifico;
                     } else if (params.potenza_contrattuale && params.costo_totale) {
-                        // Per teleriscaldamento
                         costInput = params.costo_totale;
                     }
-                    // Altri casi possono essere aggiunti qui
                 }
-                
-                // Calcola Imas (incentivo massimo standard)
+
                 let imas = 0;
                 try {
-                    // Passiamo contextData per coerenza con explain() e con src/data.js
                     imas = intervention.calculate(params, operatorType, contextData);
                 } catch (error) {
                     details.push({
@@ -2335,64 +2347,58 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     return;
                 }
 
-                // Con incentivo al 100%: incentivo = min(100% costo, Imas)
-                const incentivo100 = Math.min(costInput, imas);
-                
                 totalCost += costInput;
                 totalImas += imas;
 
-                let incentivo100Reason = '';
-                if (isArt48ter) {
-                    const buildingNames = {
-                        'tertiary_school': 'Scuola',
-                        'tertiary_hospital': 'Ospedale/Struttura sanitaria'
-                    };
-                    incentivo100Reason = `Art. 48-ter (${buildingNames[contextData.buildingSubcategory]})`;
-                } else if (isPiccoloComune) {
-                    incentivo100Reason = `Comune < 15.000 abitanti`;
+                const apply100 = isArt48ter || (isPiccoloComune && !piccoloComuneExclusions.includes(intId));
+                if (apply100) {
+                    const incentivo100 = Math.min(costInput, imas);
+                    let incentivo100Reason = isArt48ter ? `Art. 48-ter (${contextData.buildingSubcategory})` : `Comune < 15.000 abitanti`;
+                    details.push({
+                        id: intId,
+                        name: intervention.name,
+                        baseIncentive: incentivo100,
+                        appliedPremiums: [{ id: 'incentivo-100-auto', name: `Incentivo al 100% - ${incentivo100Reason}`, value: incentivo100 }],
+                        finalIncentive: incentivo100,
+                        note: `100% spesa (€${costInput.toLocaleString('it-IT')}), max Imas €${imas.toLocaleString('it-IT')}`
+                    });
+                    sumBaseIncentives += incentivo100;
+                    applied100Total += incentivo100;
+                    applied100Count += 1;
+                } else {
+                    details.push({
+                        id: intId,
+                        name: intervention.name,
+                        baseIncentive: imas,
+                        appliedPremiums: [],
+                        finalIncentive: imas,
+                        note: `Imas calcolato: €${imas.toLocaleString('it-IT')}`
+                    });
+                    sumBaseIncentives += imas;
                 }
-
-                details.push({
-                    id: intId,
-                    name: intervention.name,
-                    baseIncentive: incentivo100,
-                    appliedPremiums: [{ 
-                        id: 'incentivo-100-auto', 
-                        name: `Incentivo al 100% - ${incentivo100Reason}`, 
-                        value: incentivo100 
-                    }],
-                    finalIncentive: incentivo100,
-                    note: `100% spesa (€${costInput.toLocaleString('it-IT')}), max Imas €${imas.toLocaleString('it-IT')}`
-                });
-
-                sumBaseIncentives += incentivo100;
             });
 
-            let premiumNote = '';
-            if (isArt48ter) {
-                const buildingNames = {
-                    'tertiary_school': 'edificio scolastico',
-                    'tertiary_hospital': 'struttura ospedaliera/sanitaria pubblica'
-                };
-                premiumNote = `Art. 48-ter applicato automaticamente per ${buildingNames[contextData.buildingSubcategory]}. Incentivo al 100% della spesa ammissibile (totale spesa: €${totalCost.toLocaleString('it-IT')}, tetto massimo: €${totalImas.toLocaleString('it-IT')})`;
-            } else if (isPiccoloComune) {
-                premiumNote = `Maggiorazione per Comune sotto 15.000 abitanti applicata. L'edificio è di proprietà ed utilizzato dal Comune, con intervento diretto. Incentivo al 100% della spesa ammissibile (totale spesa: €${totalCost.toLocaleString('it-IT')}, tetto massimo: €${totalImas.toLocaleString('it-IT')}). Dovrai attestare queste condizioni nella richiesta al GSE.`;
-            }
+            if (applied100Count > 0) {
+                let premiumNote = isArt48ter
+                    ? `Art. 48-ter applicato automaticamente per ${contextData.buildingSubcategory}. Incentivo al 100% della spesa ammissibile (totale spesa: €${totalCost.toLocaleString('it-IT')}, tetto massimo: €${totalImas.toLocaleString('it-IT')})`
+                    : `Maggiorazione per Comune sotto 15.000 abitanti applicata per alcuni interventi. Incentivo al 100% della spesa ammissibile per gli interventi ammissibili (totale spesa: €${totalCost.toLocaleString('it-IT')}, tetto massimo: €${totalImas.toLocaleString('it-IT')}).`;
 
-            return {
-                total: sumBaseIncentives,
-                subtotal: sumBaseIncentives,
-                details,
-                appliedGlobalPremiums: [{
-                    id: 'incentivo-100-auto',
-                    name: isArt48ter ? 'Incentivo 100% - Art. 48-ter' : 'Incentivo 100% - Piccolo Comune',
-                    value: sumBaseIncentives,
-                    note: premiumNote
-                }],
-                wasCapped: false,
-                originalTotal: sumBaseIncentives,
-                isIncentivo100: true
-            };
+                return {
+                    total: sumBaseIncentives,
+                    subtotal: sumBaseIncentives,
+                    details,
+                    appliedGlobalPremiums: [{
+                        id: 'incentivo-100-auto',
+                        name: isArt48ter ? 'Incentivo 100% - Art. 48-ter' : 'Incentivo 100% - Piccolo Comune (parziale)',
+                        value: applied100Total,
+                        note: premiumNote
+                    }],
+                    wasCapped: false,
+                    originalTotal: sumBaseIncentives,
+                    isIncentivo100: true
+                };
+            }
+            // Altrimenti proseguiamo con la modalità standard
         }
 
         // MODALITÀ STANDARD (senza incentivo al 100%)
