@@ -340,6 +340,28 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         let p = 0.40;
         let pDesc = '40% (base)';
 
+        // --- Special rule: NZEB (1.D) has its own percentuale logic ---
+        if (interventionId === 'nzeb') {
+            // NZEB: base 65%; if premio UE present -> 75%; but if Art.48-ter or piccolo comune -> 100%
+            let p_nzeb = 0.65;
+            let pDesc_nzeb = '65% (base NZEB)';
+
+            if (isArt48ter || isPiccoloComuneEffective) {
+                p_nzeb = 1.0;
+                pDesc_nzeb = isArt48ter ? '100% (Art. 48-ter: edifici speciali)' : '100% (Comune < 15.000 abitanti)';
+                return { p: p_nzeb, pDesc: pDesc_nzeb };
+            }
+
+            if (hasUE) {
+                p_nzeb = 0.75;
+                pDesc_nzeb = '75% (NZEB + premio Prodotti UE)';
+            }
+
+            // enforce cap at 100%
+            if (p_nzeb > 1.0) p_nzeb = 1.0;
+            return { p: p_nzeb, pDesc: pDesc_nzeb };
+        }
+
         // --- New rule: for companies (imprese) apply simplified Category 1 logic ---
         // Applicable operatorType values for companies
         const companyTypes = ['private_tertiary_small', 'private_tertiary_medium', 'private_tertiary_large'];
@@ -2462,12 +2484,22 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const params = inputsByIntervention[intId] || {};
                 let costInput = params.costo_totale || params.spesa_totale || params.costo_intervento || 0;
                 if (!costInput) {
-                    if (Array.isArray(params.righe_opache) && params.righe_opache.length > 0) {
-                        costInput = params.righe_opache.reduce((sum, r) => sum + (parseFloat(r.costo_totale) || 0), 0);
-                    } else if (params.superficie && params.costo_specifico) {
-                        costInput = params.superficie * params.costo_specifico;
-                    } else if (params.potenza_contrattuale && params.costo_totale) {
-                        costInput = params.costo_totale;
+                    // Check common table-like fields that contain per-row costo_totale (e.g. righe_opache, righe_schermature, righe_pompe)
+                    const rowArrays = Object.keys(params).filter(k => Array.isArray(params[k]));
+                    for (const k of rowArrays) {
+                        const arr = params[k];
+                        // Sum any costo_totale fields present in the rows
+                        const s = arr.reduce((sum, r) => sum + (parseFloat(r?.costo_totale) || 0), 0);
+                        if (s > 0) { costInput = s; break; }
+                    }
+
+                    // Fallbacks: superficie*costo_specifico or single-field costo_totale
+                    if (!costInput) {
+                        if (params.superficie && params.costo_specifico) {
+                            costInput = params.superficie * params.costo_specifico;
+                        } else if (params.potenza_contrattuale && params.costo_totale) {
+                            costInput = params.costo_totale;
+                        }
                     }
                 }
 

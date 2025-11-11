@@ -2244,15 +2244,40 @@ async function initCalculator() {
         detailsHtml += 'L\'ammissione all\'incentivo e la determinazione del suo ammontare sono subordinate all\'esito positivo dell\'istruttoria condotta dal GSE secondo i criteri stabiliti dal D.M. Conto Termico 3.0.</p>';
         detailsHtml += '</div>';
 
-        // 6. Mostra i risultati (usa fallback se combo.total è zero ma i dettagli contengono valori)
-        let displayTotal = combo.total || 0;
-        if ((!displayTotal || displayTotal === 0) && Array.isArray(combo.details) && combo.details.length > 0) {
-            const sumDetails = combo.details.reduce((s, d) => s + (Number(d.finalIncentive) || 0), 0);
+        // 6. Mostra i risultati (usa fallback se combo.total non è un numero valido ma i dettagli contengono valori)
+        // Helper: parse numbers possibly formatted in Italian locale (e.g. "1.234,56")
+        function parseLocaleNumber(v) {
+            if (v === null || v === undefined) return NaN;
+            if (typeof v === 'number') return v;
+            let s = String(v).trim();
+            if (s === '') return NaN;
+            // Remove currency symbols, euro sign, non-breaking spaces and ordinary spaces
+            s = s.replace(/€/g, '').replace(/\u00A0/g, '').replace(/\s+/g, '');
+            // Remove any surrounding parentheses
+            s = s.replace(/^\(|\)$/g, '');
+            // If contains comma, treat '.' as thousands sep and ',' as decimal
+            if (s.indexOf(',') >= 0) {
+                const cleaned = s.replace(/\./g, '').replace(/,/g, '.');
+                const n = Number(cleaned);
+                return isNaN(n) ? NaN : n;
+            }
+            // Otherwise try plain Number after removing thousand separators like dots
+            const n = Number(s.replace(/\./g, ''));
+            return isNaN(n) ? NaN : n;
+        }
+
+        let displayTotal = parseLocaleNumber(combo.total);
+        // If combo.total is not a finite positive number, compute fallback from details
+        if ((!Number.isFinite(displayTotal) || displayTotal === 0) && Array.isArray(combo.details) && combo.details.length > 0) {
+            const sumDetails = combo.details.reduce((s, d) => {
+                const v = parseLocaleNumber(d.finalIncentive);
+                return s + (Number.isFinite(v) ? v : 0);
+            }, 0);
             if (sumDetails > 0) {
-                console.warn('DEBUG: combo.total is zero — falling back to sum of details for display:', sumDetails);
+                console.warn('DEBUG: combo.total is invalid/zero — falling back to sum of details for display:', sumDetails);
                 displayTotal = sumDetails;
                 // Annotate detailsHtml so the user knows this was a fallback
-                detailsHtml = '<div class="notice">⚠️ Nota: il valore mostrato in header è calcolato come somma dei dettagli poiché il totale combinato risultava a 0.</div>' + detailsHtml;
+                detailsHtml = '<div class="notice">⚠️ Nota: il valore mostrato in header è calcolato come somma dei dettagli poiché il totale combinato risultava non valido o 0.</div>' + detailsHtml;
             }
         }
 
