@@ -1403,7 +1403,10 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             ],
             calculate: (params, operatorType, contextData) => {
                 const { tipo_infrastruttura, numero_punti, potenza, costo_totale } = params;
-                if (!costo_totale) return 0;
+                // Treat numeric 0 as a valid entered value. Only bail out when the value
+                // is actually missing (undefined/null). This allows users to enter 0
+                // or edit the field freely without being blocked by an early return.
+                if (costo_totale === undefined || costo_totale === null) return 0;
 
                 // Limiti massimi di costo secondo Art. 5.1.g
                 let costoMassimoAmmissibile;

@@ -785,7 +785,16 @@ async function initCalculator() {
 
                 // Valida il campo
                 const isEmpty = value === null || value === undefined || value === '';
-                let isInvalid = input.type === 'number' && (isEmpty || isNaN(value) || value < (input.min || 0));
+                // By default numeric fields are invalid when empty or outside bounds. For
+                // intervento `infrastrutture-ricarica` we must NOT block user input on
+                // the `costo_totale` field: allow empty entry and only mark invalid if
+                // a non-empty value is malformed or out of range.
+                let isInvalid;
+                if (intId === 'infrastrutture-ricarica' && input.id === 'costo_totale') {
+                    isInvalid = input.type === 'number' && (!isEmpty && (isNaN(value) || value < (input.min || 0)));
+                } else {
+                    isInvalid = input.type === 'number' && (isEmpty || isNaN(value) || value < (input.min || 0));
+                }
 
                 // Se l'elemento DOM esiste, considera anche la validità HTML5 (es. customValidity/max)
                 if (!isInvalid && inputEl && typeof inputEl.checkValidity === 'function') {
@@ -1539,8 +1548,11 @@ async function initCalculator() {
                     case 'Oltre 100kW': maxCost = 110000; break;
                 }
                 if (maxCost) {
-                    costoTot.max = String(Math.max(0, Math.round(maxCost)));
-                    costoTot.setAttribute('max', String(Math.max(0, Math.round(maxCost))));
+                    // Do NOT set the HTML `max` attribute — that would make the browser
+                    // mark the field invalid when the user types a number > max. We want
+                    // to allow free editing and only show a non-blocking visual
+                    // warning. Store the computed max in dataset for reference.
+                    costoTot.dataset.max = String(Math.max(0, Math.round(maxCost)));
                     costoTot.title = `Spesa massima ammissibile: ${Math.round(maxCost).toLocaleString('it-IT')} € (Regole Applicative)`;
                     costoTot.placeholder = `Max: ${Math.round(maxCost).toLocaleString('it-IT')} €`;
                     
@@ -1571,7 +1583,9 @@ async function initCalculator() {
                             this.title = `La spesa supera il massimale indicativo: ${Math.round(currentMaxCost).toLocaleString('it-IT')} €`;
                         } else {
                             this.classList.remove('max-warning');
-                            this.title = `Spesa massima ammissibile: ${Math.round(currentMaxCost).toLocaleString('it-IT')} €`;
+                            // restore the default informative title (use dataset value if present)
+                            const ds = this.dataset.max ? Number(this.dataset.max) : Math.round(currentMaxCost || 0);
+                            this.title = `Spesa massima ammissibile: ${ds.toLocaleString('it-IT')} €`;
                         }
                     });
                     // Aggiorna lo stato anche su input (in tempo reale, incluse cancellazioni)
