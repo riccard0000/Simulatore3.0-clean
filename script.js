@@ -614,6 +614,22 @@ async function initCalculator() {
         calculatorData.buildingCategories.forEach(building => {
             // Se la categoria ha sottocategorie, mostra solo quelle compatibili
             if (building.subcategories && building.subcategories.length > 0) {
+                // Special-case: per le imprese piccole/medie vogliamo mostrare il
+                // terziario senza optgroup (come per le grandi imprese): presentare
+                // direttamente l'opzione "tertiario_generic" come scelta singola.
+                if (building.id === 'tertiary' && ['small_company', 'medium_company', 'large_company', 'person'].includes(state.selectedSubject)) {
+                    const sub = building.subcategories.find(s => s.id === 'tertiary_generic');
+                    if (sub) {
+                        const option = document.createElement('option');
+                        option.value = sub.id;
+                        option.textContent = `${sub.name}` + (sub.description ? ` - ${sub.description}` : '');
+                        if (sub.note) option.title = sub.note;
+                        buildingCategorySelect.appendChild(option);
+                    }
+                    // Salta il normale rendering delle sottocategorie
+                    return;
+                }
+
                 const compatibleSubcategories = building.subcategories.filter(sub => 
                     sub.allowedSubjects.includes(state.selectedSubject)
                 );
