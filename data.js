@@ -2,6 +2,30 @@
 // Modificando questo file è possibile aggiornare le opzioni, i parametri
 // e le logiche di calcolo senza toccare il codice principale.
 
+// Normative SCOP minima mapping (tabella ecodesign) — shared helper
+const PUMP_SCOP_MIN_TABLE = {
+    'aria/aria split/multisplit': 3.8,
+    'aria/aria fixed double duct': 3.42,
+    'aria/aria vrf/vrv': 3.5,
+    'aria/aria rooftop': 3.2,
+    'acqua/aria': 3.625,
+    'aria/acqua': 2.825,
+    'acqua/acqua': 3.325,
+    'salamoia/aria': 3.2,
+    'salamoia/acqua': 3.325
+};
+
+function getScopMinFromTipo(tipo) {
+    const tcanon = String(tipo || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+    for (const k of Object.keys(PUMP_SCOP_MIN_TABLE)) {
+        const kcanon = String(k).toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+        if (tcanon === kcanon || tcanon.indexOf(kcanon) !== -1 || kcanon.indexOf(tcanon) !== -1) {
+            return PUMP_SCOP_MIN_TABLE[k];
+        }
+    }
+    return 1;
+}
+
 const calculatorData = { // Updated: 2025-11-04 15:45:25
     // STEP 1: Soggetti Ammessi (chi ha disponibilità dell'immobile)
     subjectTypes: [
@@ -1599,94 +1623,139 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         // --- INTERVENTI DI PRODUZIONE DI ENERGIA TERMICA DA FONTI RINNOVABILI (Art. 8) ---
         'pompa-calore': {
             name: '2.A - Sostituzione con pompe di calore',
-            description: 'Art. 8, comma 1, lett. a) - Sostituzione di impianti di climatizzazione invernale esistenti con pompe di calore elettriche o a gas ad alta efficienza per la produzione di energia termica da fonti rinnovabili.',
+            description: 'Art. 8, comma 1, lett. a) - Sostituzione di impianti di climatizzazione invernale esistenti con pompe di calore elettriche ad alta efficienza per la produzione di energia termica da fonti rinnovabili.',
             category: 'Fonti Rinnovabili',
-                allowedOperators: ['pa', 'private_tertiary_person', 'private_tertiary_small', 'private_tertiary_medium', 'private_tertiary_large', 'private_residential'],
-                restrictionNote: 'Per imprese e ETS economici: NON ammesse pompe di calore a GAS (art. 25, comma 2). Solo pompe di calore elettriche.',
+            allowedOperators: ['pa', 'private_tertiary_person', 'private_tertiary_small', 'private_tertiary_medium', 'private_tertiary_large', 'private_residential'],
+            restrictionNote: 'Per imprese e ETS economici: NON ammesse pompe di calore a GAS (art. 25, comma 2). Solo pompe di calore elettriche.',
             inputs: [
-                { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0, help: 'Necessario per calcolo premialità 100%' },
-                { id: 'tipo_pompa', name: 'Tipo di pompa di calore', type: 'select', options: ['aria/aria split/multisplit', 'aria/aria fixed double duct', 'aria/aria VRF/VRV (13-35kW)', 'aria/aria VRF/VRV (>35kW)', 'aria/aria rooftop (≤35kW)', 'aria/aria rooftop (>35kW)', 'aria/acqua (≤35kW)', 'aria/acqua (>35kW)', 'acqua/aria (≤35kW)', 'acqua/aria (>35kW)', 'acqua/acqua (≤35kW)', 'acqua/acqua (>35kW)', 'salamoia/aria (≤35kW)', 'salamoia/aria (>35kW)', 'salamoia/acqua (≤35kW)', 'salamoia/acqua (>35kW)'] },
-                { id: 'potenza_nominale', name: 'Potenza termica nominale Prated (kW)', type: 'number', min: 0, step: 0.1 },
-                { id: 'scop', name: 'SCOP stagionale', type: 'number', min: 2.5, step: 0.01 },
-                { id: 'scop_minimo', name: 'SCOP minimo ecodesign', type: 'number', min: 2.5, step: 0.01 },
-                { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] }
+                { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0, help: 'Opzionale: se fornisci i costi per singola pompa, questo campo può restare vuoto.' },
+                {
+                    id: 'righe_pompe',
+                    name: 'Tabella pompe di calore',
+                    type: 'table',
+                    columns: [
+                        { id: 'tipo_pompa', name: 'Tipo di pompa di calore', type: 'select', options: ['aria/aria split/multisplit', 'aria/aria fixed double duct', 'aria/aria VRF/VRV', 'aria/aria rooftop', 'aria/acqua', 'acqua/aria', 'acqua/acqua', 'salamoia/aria', 'salamoia/acqua'] },
+                        { id: 'potenza_nominale', name: 'Potenza termica nominale Prated (kW)', type: 'number', min: 0, step: 0.1 },
+                        { id: 'scop', name: 'SCOP stagionale', type: 'number', min: 2.5, step: 0.01 },
+                        { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] },
+                        { id: 'costo_totale', name: 'Costo totale pompa (€)', type: 'number', min: 0, optional: true }
+                    ],
+                    help: 'Aggiungi una riga per ogni pompa presente nell\'impianto. I parametri di ciascuna riga verranno valutati separatamente e sommati.'
+                }
             ],
             calculate: (params, operatorType) => {
-                const { tipo_pompa, potenza_nominale, scop, scop_minimo, zona_climatica } = params;
-                if (!potenza_nominale || !scop || !scop_minimo || !zona_climatica) return 0;
-                
-                // Formula: Ia_tot = Ci × EI
-                // dove EI = Qu × [1 - 1/SCOP] × kp
-                // e Qu = Prated × Quf
-                
-                // Tabella 8: Quf per zona climatica
+                const rows = Array.isArray(params?.righe_pompe) ? params.righe_pompe : [];
+                if (rows.length === 0) return 0;
+
                 const qufTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
-                const quf = qufTable[zona_climatica];
-                
-                // Calcolo Qu
-                const qu = potenza_nominale * quf;
-                
-                // Calcolo kp (coefficiente di premialità)
-                const kp = scop / scop_minimo;
-                
-                // Calcolo EI (energia termica incentivata)
-                let ei;
-                if (tipo_pompa.includes('fixed double duct')) {
-                    // Per fixed double duct usa COP invece di SCOP
-                    // Formula: EI = Qu × [1 - 1/COP] × kp
-                    // Assumiamo COP = SCOP per semplificazione (andrebbe chiesto separatamente)
-                    ei = qu * (1 - 1/scop) * kp;
-                } else {
-                    ei = qu * (1 - 1/scop) * kp;
+
+                function assignCi(tipoRaw, potenza) {
+                    if (potenza === undefined || potenza === null) return null;
+                    const p = Number(potenza);
+                    const tipo = (tipoRaw || '').toLowerCase();
+
+                    if (tipo.includes('split') || tipo.includes('multisplit')) { if (p <= 12) return 0.070; return null; }
+                    if (tipo.includes('fixed') && tipo.includes('double')) { if (p <= 12) return 0.200; return null; }
+                    if (tipo.includes('vrf') || tipo.includes('vrv')) { if (p >= 13 && p <= 35) return 0.150; if (p > 35) return 0.055; return null; }
+                    if (tipo.includes('rooftop')) { if (p <= 35) return 0.150; if (p > 35) return 0.055; return null; }
+                    if (tipo.includes('aria/acqua') || tipo.includes('aria-acqua') || tipo.includes('aria acqua')) { if (p >= 13 && p <= 35) return 0.150; if (p > 35) return 0.060; return null; }
+                    if (tipo.includes('acqua/aria') || tipo.includes('acqua-aria') || (tipo.includes('acqua') && tipo.includes('aria'))) { if (p >= 13 && p <= 35) return 0.160; if (p > 35) return 0.060; return null; }
+                    if (tipo.includes('acqua/acqua') || tipo.includes('acqua-acqua')) { if (p >= 13 && p <= 35) return 0.160; if (p > 35) return 0.060; return null; }
+                    if (tipo.includes('salamoia')) { if (p >= 13 && p <= 35) return 0.160; if (p > 35) return 0.060; return null; }
+                    return null;
                 }
-                
-                // Tabella 9: Ci coefficiente di valorizzazione
-                let ci;
-                if (tipo_pompa.includes('aria/aria split') || tipo_pompa.includes('fixed double duct')) {
-                    ci = potenza_nominale <= 12 ? (tipo_pompa.includes('split') ? 0.070 : 0.200) : 0.055;
-                } else if (tipo_pompa.includes('VRF') || tipo_pompa.includes('rooftop')) {
-                    if (potenza_nominale <= 35) ci = 0.150;
-                    else ci = 0.055;
-                } else if (tipo_pompa.includes('aria/acqua')) {
-                    ci = potenza_nominale <= 35 ? 0.150 : 0.060;
-                } else if (tipo_pompa.includes('acqua/aria')) {
-                    ci = potenza_nominale <= 35 ? 0.160 : 0.060;
-                } else if (tipo_pompa.includes('acqua/acqua')) {
-                    ci = potenza_nominale <= 35 ? 0.160 : 0.060;
-                } else if (tipo_pompa.includes('salamoia')) {
-                    ci = potenza_nominale <= 35 ? 0.160 : 0.060;
-                } else {
-                    ci = 0.150; // default
-                }
-                
-                // Incentivo annuo
-                const incentivo_annuo = ci * ei;
-                
-                // Incentivo totale (assumiamo durata incentivo, es. 2 anni per residenziale, 5 per PA)
-                const durata = operatorType === 'pa' ? 5 : 2;
-                return incentivo_annuo * durata;
+
+                // scop_minimo is derived from the normative table via getScopMinFromTipo()
+
+                let totalIncentive = 0;
+                rows.forEach(row => {
+                    const tipo_pompa = row?.tipo_pompa || '';
+                    const potenza_nominale = Number(row?.potenza_nominale) || 0;
+                    const scop = Number(row?.scop) || 0;
+                    // derive normative SCOP minimo from the pump type (tabellato); do not require user input
+                    const scop_minimo = getScopMinFromTipo(tipo_pompa) || 1;
+                    const zona_climatica = row?.zona_climatica;
+                    if (!potenza_nominale || !scop || !zona_climatica) return;
+
+                    const quf = qufTable[zona_climatica] || 0;
+                    const qu = potenza_nominale * quf;
+                    const kp = scop / scop_minimo;
+                    const ei = qu * (1 - 1/scop) * kp;
+                    const ci = assignCi(tipo_pompa, potenza_nominale);
+                    const incentivo_annuo = ci !== null ? ci * ei : 0;
+                    const durata = operatorType === 'pa' ? 5 : 2;
+                    totalIncentive += incentivo_annuo * durata;
+                });
+
+                return totalIncentive;
             },
             explain: (params, operatorType) => {
-                const { tipo_pompa, potenza_nominale, scop, scop_minimo, zona_climatica } = params;
+                const rows = Array.isArray(params?.righe_pompe) ? params.righe_pompe : [];
                 const qufTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
-                const Quf = qufTable[zona_climatica]||0; const Pr=potenza_nominale||0;
-                const Qu = Pr * Quf;
-                const kp = (scop||0) / (scop_minimo||1);
-                const EI = Qu * (1 - 1/(scop||1)) * kp;
-                let Ci;
-                if (tipo_pompa?.includes('aria/aria split') || tipo_pompa?.includes('fixed double duct')) {
-                    Ci = Pr <= 12 ? (tipo_pompa.includes('split') ? 0.070 : 0.200) : 0.055;
-                } else if (tipo_pompa?.includes('VRF') || tipo_pompa?.includes('rooftop')) {
-                    Ci = Pr <= 35 ? 0.150 : 0.055;
-                } else if (tipo_pompa?.includes('aria/acqua')) { Ci = Pr<=35?0.150:0.060; }
-                else if (tipo_pompa?.includes('acqua/aria')) { Ci = Pr<=35?0.160:0.060; }
-                else if (tipo_pompa?.includes('acqua/acqua')) { Ci = Pr<=35?0.160:0.060; }
-                else if (tipo_pompa?.includes('salamoia')) { Ci = Pr<=35?0.160:0.060; }
-                else { Ci=0.150; }
-                const Ia_annuo = Ci * EI;
-                const durata = operatorType === 'pa' ? 5 : 2;
-                const totale = Ia_annuo * durata;
-                return { result: totale, formula:`Ia_tot = Ci × EI × durata; EI = Qu × (1 - 1/SCOP) × kp; Qu = Prated × Quf`, variables:{Ci,EI,Qu,Prated:Pr,Quf,SCOP:scop||0,kp,durata} };
+                const steps = [];
+                let total = 0;
+
+                rows.forEach((row, idx) => {
+                    const tipo_pompa = row?.tipo_pompa || '';
+                    const Pr = Number(row?.potenza_nominale) || 0;
+                    const scop = Number(row?.scop) || 0;
+                    // compute scop_minimo from tipo_pompa (tabellato) and report it in the explain
+                    const scop_minimo = getScopMinFromTipo(tipo_pompa) || 1;
+                    const zona = row?.zona_climatica;
+                    if (!Pr || !scop || !zona) {
+                        steps.push(`Riga ${idx+1}: parametri incompleti, ignorata.`);
+                        return;
+                    }
+                    const Quf = qufTable[zona] || 0;
+                    const Qu = Pr * Quf;
+                    const kp = scop / scop_minimo;
+                    const EI = Qu * (1 - 1/scop) * kp;
+
+                    const assignCiLocal = (tipoRaw, potenza) => {
+                        if (potenza === undefined || potenza === null) return null;
+                        const p = Number(potenza);
+                        const tipo = (tipoRaw || '').toLowerCase();
+                        if (tipo.includes('split') || tipo.includes('multisplit')) { if (p <= 12) return 0.070; return null; }
+                        if (tipo.includes('fixed') && tipo.includes('double')) { if (p <= 12) return 0.200; return null; }
+                        if (tipo.includes('vrf') || tipo.includes('vrv')) { if (p >= 13 && p <= 35) return 0.150; if (p > 35) return 0.055; return null; }
+                        if (tipo.includes('rooftop')) { if (p <= 35) return 0.150; if (p > 35) return 0.055; return null; }
+                        if (tipo.includes('aria/acqua') || tipo.includes('aria-acqua') || tipo.includes('aria acqua')) { if (p >= 13 && p <= 35) return 0.150; if (p > 35) return 0.060; return null; }
+                        if (tipo.includes('acqua/aria') || tipo.includes('acqua-aria') || (tipo.includes('acqua') && tipo.includes('aria'))) { if (p >= 13 && p <= 35) return 0.160; if (p > 35) return 0.060; return null; }
+                        if (tipo.includes('acqua/acqua') || tipo.includes('acqua-acqua')) { if (p >= 13 && p <= 35) return 0.160; if (p > 35) return 0.060; return null; }
+                        if (tipo.includes('salamoia')) { if (p >= 13 && p <= 35) return 0.160; if (p > 35) return 0.060; return null; }
+                        return null;
+                    };
+
+                    const Ci = assignCiLocal(tipo_pompa, Pr);
+                    const Ia_annuo = Ci !== null ? Ci * EI : 0;
+                    const durata = operatorType === 'pa' ? 5 : 2;
+                    const totale = Ia_annuo * durata;
+                    total += totale;
+
+                    steps.push(`Riga ${idx+1} (${tipo_pompa} - Pr=${Pr} kW, zona ${zona}):`);
+                    steps.push(`• SCOP inserito = ${scop}; SCOP minimo ecodesign (tabellato) = ${scop_minimo}`);
+                    steps.push(`• kp = SCOP / SCOP_minimo = ${scop.toFixed(3)} / ${scop_minimo.toFixed(3)} = ${kp.toFixed(3)}`);
+                    // Detailed breakdown for Qu and EI to make the derivation explicit
+                    const qufVal = Quf;
+                    const quComputed = Qu;
+                    const oneMinusInvScop = (1 - 1/(scop||1));
+                    const eiComputed = EI;
+                    steps.push(`• Quf (ore/anno per zona ${zona}) = ${qufVal}`);
+                    steps.push(`• Qu = Pr × Quf = ${Pr} kW × ${qufVal} h = ${quComputed.toFixed(2)} kWh/anno`);
+                    steps.push(`• Fattore = (1 - 1/SCOP) = 1 - 1/${scop} = ${oneMinusInvScop.toFixed(6)}`);
+                    steps.push(`• kp = SCOP / SCOP_minimo = ${scop.toFixed(3)} / ${scop_minimo.toFixed(3)} = ${kp.toFixed(3)}`);
+                    steps.push(`• EI = Qu × Fattore × kp = ${quComputed.toFixed(2)} × ${oneMinusInvScop.toFixed(6)} × ${kp.toFixed(3)} = ${eiComputed.toFixed(2)}`);
+                    steps.push(`• Ci = ${Ci===null? 'N/D' : Ci} → Ia_annuo = Ci × EI = ${Ia_annuo.toFixed(2)}; durata = ${durata} anni → incentivo € ${totale.toFixed(2)}`);
+                    // separator between rows for readability
+                    steps.push('----------------------------------------');
+                });
+
+                // Final summary: total incentive across all pump rows
+                steps.push('');
+                steps.push('Riepilogo totale:');
+                steps.push(`Totale incentivo per tutte le pompe: € ${total.toFixed(2)}`);
+
+                return { result: total, steps, formula: 'Somma degli incentivi calcolati per ciascuna pompa (Ia_tot per pompa × durata)', variables: { rowsCount: rows.length, totale: total } };
             }
         },
         'sistemi-ibridi': {
@@ -1700,12 +1769,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 { id: 'tipo_sistema', name: 'Tipo sistema', type: 'select', options: ['Ibrido factory made (Pn ≤35kW)', 'Ibrido factory made (Pn >35kW)', 'Sistema bivalente (Pn ≤35kW)', 'Sistema bivalente (Pn >35kW)'] },
                 { id: 'potenza_pdc', name: 'Potenza termica pompa di calore Prated (kW)', type: 'number', min: 0, step: 0.1 },
                 { id: 'scop', name: 'SCOP pompa di calore', type: 'number', min: 2.5, step: 0.01 },
-                { id: 'scop_minimo', name: 'SCOP minimo ecodesign', type: 'number', min: 2.5, step: 0.01 },
                 { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] }
             ],
             calculate: (params, operatorType) => {
-                const { tipo_sistema, potenza_pdc, scop, scop_minimo, zona_climatica } = params;
-                if (!potenza_pdc || !scop || !scop_minimo || !zona_climatica) return 0;
+                const { tipo_sistema, potenza_pdc, scop, zona_climatica } = params;
+                if (!potenza_pdc || !scop || !zona_climatica) return 0;
+                // For sistemi ibridi we assume a typical pump type aria/acqua for ecodesign minima
+                const scop_minimo = 2.825; // aria/acqua normative minimum
                 
                 // Formula: Ia_tot = k × Ei × Ci
                 // dove Ei = Qu × [1 - 1/SCOP] × kp
@@ -1717,7 +1787,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 // Qu = Prated × Quf
                 const qu = potenza_pdc * quf;
                 
-                // kp = SCOP/SCOP_minimo
+                // kp = SCOP/SCOP_minimo (scop_minimo assumed from ecodesign table)
                 const kp = scop / scop_minimo;
                 
                 // EI
@@ -1742,13 +1812,16 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 return incentivo_annuo * durata;
             },
             explain: (params, operatorType) => {
-                const { tipo_sistema, potenza_pdc, scop, scop_minimo, zona_climatica } = params;
+                const { tipo_sistema, potenza_pdc, scop, zona_climatica } = params;
                 const qufTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
-                const Quf = qufTable[zona_climatica]||0; const Pr=potenza_pdc||0; const Qu=Pr*Quf; const kp=(scop||0)/(scop_minimo||1);
+                const Quf = qufTable[zona_climatica]||0; const Pr=potenza_pdc||0; const Qu=Pr*Quf;
+                // assume aria/acqua normative minimum for sistemi ibridi
+                const scop_minimo = 2.825;
+                const kp=(scop||0)/(scop_minimo||1);
                 const EI = Qu * (1 - 1/(scop||1)) * kp;
                 let k; if (tipo_sistema?.includes('factory made')) k=1.25; else k = tipo_sistema?.includes('>35kW')?1.1:1.0;
                 const Ci = Pr<=35?0.150:0.060; const Ia_annuo = k * EI * Ci; const durata= operatorType==='pa'?5:2; const tot=Ia_annuo*durata;
-                return { result: tot, formula:`Ia_tot = k × EI × Ci × durata; EI = Qu × (1 - 1/SCOP) × kp; Qu = Prated × Quf`, variables:{k,Ei:EI,Qu,Prated:Pr,Quf,Ci,SCOP:scop||0,kp,durata} };
+                return { result: tot, formula:`Ia_tot = k × EI × Ci × durata; EI = Qu × (1 - 1/SCOP) × kp; Qu = Prated × Quf`, variables:{k,Ei:EI,Qu,Prated:Pr,Quf,Ci,SCOP:scop||0,scop_minimo,kp,durata} };
             }
         },
         'biomassa': {

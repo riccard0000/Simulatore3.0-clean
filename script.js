@@ -30,6 +30,26 @@ async function initCalculator() {
         subjectSpecificData: {} // Dati aggiuntivi come popolazione_comune
     };
 
+    // NOTE: automatic ecodesign SCOP/COP population removed per user request.
+    // Users must enter SCOP/SCOP_min manually; validation and power constraints remain active.
+
+    // Normative SCOP minima per tipologia pompa (tabella ecodesign)
+    const PUMP_SCOP_MIN = {
+        'aria/aria split/multisplit': 3.8,
+        'aria/aria fixed double duct': 3.42,
+        'aria/aria vrf/vrv': 3.5,
+        'aria/aria rooftop': 3.2,
+        'acqua/aria': 3.625,
+        'aria/acqua': 2.825,
+        'acqua/acqua': 3.325,
+        'salamoia/aria': 3.2,
+        'salamoia/acqua': 3.325
+    };
+
+    function canonicalKey(s) {
+        return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+    }
+
     // --- INIZIALIZZAZIONE ---
 
     function initialize() {
@@ -147,6 +167,7 @@ async function initCalculator() {
                 cellInput.style.width = '100%';
                 if (col.min !== undefined) cellInput.min = col.min;
                 if (col.max !== undefined) cellInput.max = col.max;
+                if (col.step !== undefined) cellInput.step = col.step;
             }
             
             cellInput.dataset.intervention = interventionId;
@@ -207,6 +228,96 @@ async function initCalculator() {
             }
             
             td.appendChild(cellInput);
+            // If this column is the seasonal SCOP, add inline error placeholder and attach validation
+            if (col.id === 'scop') {
+                const scopErr = document.createElement('small');
+                scopErr.className = 'field-error';
+                scopErr.id = `error-${interventionId}-${inputId}-${rowIndex}-${col.id}`;
+                scopErr.style.color = '#d32f2f';
+                scopErr.style.display = 'none';
+                scopErr.style.marginTop = '4px';
+                td.appendChild(scopErr);
+
+                // Helper to apply mapped minimum based on tipo_pompa in the same row
+                function applyScopMinConstraint() {
+                    try {
+                        const trEl = td.parentNode;
+                        if (!trEl) return;
+                        const tipoEl = trEl.querySelector('[data-column-id="tipo_pompa"]');
+                        const scopInput = trEl.querySelector(`[data-column-id="${col.id}"]`);
+                        if (!scopInput) return;
+                        const tipoVal = String(tipoEl ? (tipoEl.value || '') : '').trim();
+                        // find mapping with canonicalization
+                        let mapped = null;
+                        const tcanon = canonicalKey(tipoVal);
+                        for (const k of Object.keys(PUMP_SCOP_MIN)) {
+                            if (!k) continue;
+                            const kcanon = canonicalKey(k);
+                            if (tcanon === kcanon || tcanon.indexOf(kcanon) !== -1 || kcanon.indexOf(tcanon) !== -1) {
+                                mapped = PUMP_SCOP_MIN[k];
+                                break;
+                            }
+                        }
+
+                        if (mapped !== null && mapped !== undefined) {
+                            // set min attribute so global validation picks it up
+                            scopInput.setAttribute('min', String(mapped));
+                        } else {
+                            scopInput.removeAttribute('min');
+                        }
+                        // Allow flexible decimal places for SCOP (integers or 1-3 decimals).
+                        // Use step='any' to avoid HTML5 step mismatch errors; enforce max 3 decimals in JS.
+                        try { scopInput.setAttribute('step', 'any'); } catch (e) {}
+
+                        // immediate per-field check and inline message
+                        const raw = String(scopInput.value || '').replace(',', '.').trim();
+                        const num = raw === '' ? NaN : parseFloat(raw);
+                        // enforce at most 3 decimal places (but allow 0,1,2 or 3)
+                        const decPart = (raw.indexOf('.') >= 0) ? raw.split('.') [1] : '';
+                        if (decPart && decPart.length > 3) {
+                            scopInput.classList.add('invalid');
+                            try { scopInput.setCustomValidity('Inserire al massimo 3 cifre decimali'); } catch (e) {}
+                            scopErr.textContent = 'Inserire al massimo 3 cifre decimali';
+                            scopErr.style.display = 'block';
+                        } else if (!isNaN(num) && mapped !== null && mapped !== undefined && num < mapped) {
+                            scopInput.classList.add('invalid');
+                            try { scopInput.setCustomValidity(`Valore SCOP minimo richiesto: ${mapped}`); } catch (e) {}
+                            scopErr.textContent = `Valore SCOP minimo richiesto: ${mapped}`;
+                            scopErr.style.display = 'block';
+                        } else {
+                            scopInput.classList.remove('invalid');
+                            try { scopInput.setCustomValidity(''); } catch (e) {}
+                            scopErr.textContent = '';
+                            scopErr.style.display = 'none';
+                        }
+                    } catch (e) { console.warn('applyScopMinConstraint error', e); }
+                }
+
+                // Attach listeners: when SCOP changes, or tipo_pompa changes in same row
+                cellInput.addEventListener('input', () => applyScopMinConstraint());
+                // Also observe changes to tipo_pompa select in this row
+                // Use a small timeout to allow the select to be created if invoked concurrently
+                setTimeout(() => {
+                    const trEl = td.parentNode;
+                    if (!trEl) return;
+                    const tipoEl = trEl.querySelector('[data-column-id="tipo_pompa"]');
+                    if (tipoEl) {
+                        tipoEl.addEventListener('change', () => applyScopMinConstraint());
+                    }
+                    // Run initial constraint application
+                    applyScopMinConstraint();
+                }, 10);
+            }
+            // Se la colonna è potenza nominale, aggiungi un placeholder per messaggi di errore inline
+            if (col.id === 'potenza_nominale') {
+                const rowErr = document.createElement('small');
+                rowErr.className = 'field-error';
+                rowErr.id = `error-${interventionId}-${inputId}-${rowIndex || 'new'}-${col.id}`;
+                rowErr.style.color = '#d32f2f';
+                rowErr.style.display = 'none';
+                rowErr.style.marginTop = '4px';
+                td.appendChild(rowErr);
+            }
             tr.appendChild(td);
         });
         
@@ -246,7 +357,10 @@ async function initCalculator() {
         tr.appendChild(tdActions);
         
         tbody.appendChild(tr);
-        
+
+        // Applica validazione specifica per righe pompe di calore (se applicabile)
+        attachPompaRowValidation(interventionId, inputId, rowIndex, tr);
+
         // Aggiorna computed fields della riga appena aggiunta
         updateTableRowComputed(interventionId, inputId, rowIndex, columns, tr);
     }
@@ -574,13 +688,114 @@ async function initCalculator() {
             if (!intervention.inputs) return;
             
             intervention.inputs.forEach(input => {
+                // Se è un input di tipo table, validate riga per riga
+                if (input.type === 'table') {
+                    const rows = state.inputValues[intId]?.[input.id] || [];
+                    if (!Array.isArray(rows) || rows.length === 0) {
+                        allValid = false;
+                        missingFields.push(`${intervention.name}: ${input.name} (aggiungi almeno una riga)`);
+                    } else {
+                        rows.forEach((row, rIdx) => {
+                            // Per ogni colonna della tabella
+                            (input.columns || []).forEach(col => {
+                                // I campi computed o opzionali non sono obbligatori
+                                if (col.type === 'computed' || col.optional) return;
+
+                                // Preferisci il valore mostrato nel DOM (se presente) — così cancellazioni sono rilevate immediatamente
+                                const tbody = document.getElementById(`tbody-${intId}-${input.id}`);
+                                const tr = tbody ? tbody.querySelector(`tr[data-row-index="${rIdx}"]`) : null;
+                                const cellEl = tr ? tr.querySelector(`[data-column-id="${col.id}"]`) : null;
+                                let val;
+                                if (cellEl) {
+                                    let domVal = cellEl.value;
+                                    if (domVal === undefined || domVal === null) domVal = '';
+                                    if (col.type === 'number') {
+                                        // parse number, but keep empty as empty string
+                                        const parsed = (domVal === '') ? '' : parseFloat(String(domVal).replace(',', '.'));
+                                        val = (parsed === '' || isNaN(parsed)) ? (domVal === '' ? '' : domVal) : parsed;
+                                    } else {
+                                        val = String(domVal).trim();
+                                    }
+                                } else {
+                                    // Fallback: usa il valore nello stato
+                                    val = row ? row[col.id] : undefined;
+                                }
+
+                                const isEmptyCell = val === null || val === undefined || val === '';
+
+                                let cellInvalid = false;
+                                if (!isEmptyCell && cellEl) {
+                                    // For number inputs, do a manual parse/limit check so typed values
+                                    // are validated immediately (spinners not required).
+                                    if (col.type === 'number') {
+                                        const raw = String(cellEl.value || '').replace(',', '.');
+                                        const num = raw === '' ? NaN : parseFloat(raw);
+                                        const minV = (typeof col.min !== 'undefined') ? Number(col.min) : -Infinity;
+                                        const maxV = (typeof col.max !== 'undefined' && col.max !== '') ? Number(col.max) : Infinity;
+                                        if (isNaN(num) || num < minV || num > maxV) {
+                                            cellInvalid = true;
+                                            if (cellEl.classList) cellEl.classList.add('invalid');
+                                            try { cellEl.setCustomValidity(`Valore invalido`); } catch (e) {}
+                                        } else {
+                                            try { cellEl.setCustomValidity(''); } catch (e) {}
+                                        }
+                                            // Also respect any programmatic customValidity set elsewhere
+                                            try {
+                                                if (cellEl.validationMessage && cellEl.validationMessage.trim() !== '') {
+                                                    cellInvalid = true;
+                                                    if (cellEl.classList) cellEl.classList.add('invalid');
+                                                }
+                                            } catch (e) {}
+                                    } else {
+                                        // Fallback to HTML5 validity for non-number fields
+                                        if (typeof cellEl.checkValidity === 'function' && !cellEl.checkValidity()) {
+                                            cellInvalid = true;
+                                            if (cellEl.classList) cellEl.classList.add('invalid');
+                                        }
+                                    }
+                                }
+
+                                if (isEmptyCell || cellInvalid) {
+                                    allValid = false;
+                                    missingFields.push(`${intervention.name} — riga ${rIdx + 1}: ${col.name}`);
+                                    if (cellEl && cellEl.classList) cellEl.classList.add('invalid');
+
+                                    // Mostra messaggio inline se presente
+                                    const errElId = `error-${intId}-${input.id}-${rIdx}-${col.id}`;
+                                    const errEl = tr ? tr.querySelector(`#${errElId}`) : null;
+                                    if (errEl) {
+                                        errEl.textContent = isEmptyCell ? 'Campo obbligatorio' : (cellEl && cellEl.validationMessage) || 'Valore non valido';
+                                        errEl.style.display = 'block';
+                                    }
+                                } else {
+                                    if (cellEl && cellEl.classList) cellEl.classList.remove('invalid');
+                                    const errElId = `error-${intId}-${input.id}-${rIdx}-${col.id}`;
+                                    const errEl = tr ? tr.querySelector(`#${errElId}`) : null;
+                                    if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+                                }
+                            });
+                        });
+                    }
+                    return; // procediamo alla prossima input
+                }
+
+                // Campo singolo (non table) - comportamento precedente
                 const value = state.inputValues[intId]?.[input.id];
                 const inputEl = document.querySelector(`#input-${intId}-${input.id}`);
-                
+
                 // Valida il campo
                 const isEmpty = value === null || value === undefined || value === '';
-                const isInvalid = input.type === 'number' && (isEmpty || isNaN(value) || value < (input.min || 0));
-                
+                let isInvalid = input.type === 'number' && (isEmpty || isNaN(value) || value < (input.min || 0));
+
+                // Se l'elemento DOM esiste, considera anche la validità HTML5 (es. customValidity/max)
+                if (!isInvalid && inputEl && typeof inputEl.checkValidity === 'function') {
+                    if (!inputEl.checkValidity()) {
+                        // Marca come invalido in modo che venga evidenziato e bloccato
+                        inputEl.classList.add('invalid');
+                        isInvalid = true;
+                    }
+                }
+
                 // Regola speciale per infrastrutture-ricarica: obbligatorietà condizionale
                 if (intId === 'infrastrutture-ricarica') {
                     const tipo = state.inputValues[intId]?.['tipo_infrastruttura'];
@@ -616,6 +831,58 @@ async function initCalculator() {
             };
         }
         
+        return { valid: true };
+    }
+
+    // Validazione specifica per pompe di calore: potenza deve rispettare i limiti per tipo
+    function validatePompePowerConstraints() {
+        const intId = 'pompa-calore';
+        const inputId = 'righe_pompe';
+        const tbody = document.getElementById(`tbody-${intId}-${inputId}`);
+        if (!tbody) return { valid: true };
+
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        const smallTypes = ['aria/aria split/multisplit', 'aria/aria fixed double duct'];
+        const errors = [];
+
+        rows.forEach((tr, idx) => {
+            const tipoEl = tr.querySelector('[data-column-id="tipo_pompa"]');
+            const potEl = tr.querySelector('[data-column-id="potenza_nominale"]');
+            if (!tipoEl || !potEl) return;
+            const tipo = String(tipoEl.value || '').trim();
+            const raw = String(potEl.value || '').replace(',', '.').trim();
+            const pot = raw === '' ? NaN : parseFloat(raw);
+
+            // small types: max 12 kW
+            if (smallTypes.includes(tipo)) {
+                if (isNaN(pot) || pot > 12) {
+                    errors.push({ row: idx + 1, tipo, pot, msg: 'Potenza massima ammessa 12 kW per la tipologia selezionata' });
+                    if (potEl.classList) potEl.classList.add('invalid');
+                    try { potEl.setCustomValidity('Potenza massima ammessa 12 kW'); } catch (e) {}
+                } else {
+                    try { potEl.setCustomValidity(''); } catch (e) {}
+                    potEl.classList.remove('invalid');
+                }
+            }
+
+            // VRF/VRV: min 13 kW
+            const lowerTipo = tipo.toLowerCase();
+            const isVrf = lowerTipo.includes('vrf') || lowerTipo.includes('vrv');
+            if (isVrf) {
+                if (isNaN(pot) || pot < 13) {
+                    errors.push({ row: idx + 1, tipo, pot, msg: 'Potenza minima ammessa 13 kW per VRF/VRV' });
+                    if (potEl.classList) potEl.classList.add('invalid');
+                    try { potEl.setCustomValidity('Potenza minima ammessa 13 kW'); } catch (e) {}
+                } else {
+                    try { potEl.setCustomValidity(''); } catch (e) {}
+                    potEl.classList.remove('invalid');
+                }
+            }
+        });
+
+        if (errors.length > 0) {
+            return { valid: false, errors };
+        }
         return { valid: true };
     }
 
@@ -1027,6 +1294,20 @@ async function initCalculator() {
                 }
                 
                 inputDiv.appendChild(inputEl);
+
+                // Placeholder per messaggi di errore specifici del campo
+                const errId = `error-${intId}-${input.id}`;
+                let errEl = document.getElementById(errId);
+                if (!errEl) {
+                    errEl = document.createElement('small');
+                    errEl.id = errId;
+                    errEl.className = 'field-error';
+                    errEl.style.color = '#d32f2f';
+                    errEl.style.display = 'none';
+                    errEl.style.marginTop = '4px';
+                    inputDiv.appendChild(errEl);
+                }
+
                 groupDiv.appendChild(inputDiv);
 
                 // Ripristina il valore salvato se esiste, altrimenti inizializza
@@ -1293,11 +1574,234 @@ async function initCalculator() {
                             this.title = `Spesa massima ammissibile: ${Math.round(currentMaxCost).toLocaleString('it-IT')} €`;
                         }
                     });
+                    // Aggiorna lo stato anche su input (in tempo reale, incluse cancellazioni)
+                    cellInput.addEventListener('input', (e) => {
+                        const row = parseInt(e.target.dataset.rowIndex);
+                        const colId = e.target.dataset.columnId;
+                        let value = e.target.value;
+                        if (e.target.type === 'number') {
+                            value = parseFloat(value);
+                            // keep null if empty
+                            value = isNaN(value) ? null : value;
+                        }
+                        state.inputValues[interventionId][inputId][row][colId] = value;
+                        updateTableRowComputed(interventionId, inputId, row, columns, tr);
+                        // trigger global validation
+                        handleInputChange(e);
+                    });
+                    // Se questa colonna è il tipo di pompa, ri-applica la validazione sulla riga
+                    // (automatico popolamento SCOP rimosso: l'utente inserisce SCOP/SCOP_min manualmente)
+                    if (col.id === 'tipo_pompa') {
+                        cellInput.addEventListener('change', (e) => {
+                            // Aggiorna stato
+                            const row = parseInt(e.target.dataset.rowIndex);
+                            const colId = e.target.dataset.columnId;
+                            state.inputValues[interventionId][inputId][row][colId] = e.target.value;
+                            // Ri-applica validazione specifica pompa
+                            attachPompaRowValidation(interventionId, inputId, rowIndex, tr);
+                        });
+                    }
                 }
+            }
+        }
+        
+        // Limiti specifici per pompe di calore: alcune famiglie aria/aria sono
+        // tipicamente split/fixed con potenze ridotte; limitiamo la potenza a 12 kW
+        // quando l'utente seleziona le tipologie indicate.
+        if (intId === 'pompa-calore') {
+            const tipoSel = byId('tipo_pompa');
+            const potEl = byId('potenza_nominale');
+            if (!tipoSel || !potEl) return;
+
+            const tipo = (tipoSel.value || '').toString();
+            const smallTypes = ['aria/aria split/multisplit', 'aria/aria fixed double duct'];
+            const vrfCondition = tipo.includes('VRF') || tipo.includes('VRV') || tipo.toLowerCase().includes('vrf') || tipo.toLowerCase().includes('vrv');
+
+            if (smallTypes.includes(tipo)) {
+                // Applichiamo max = 12 kW e comportamento di clamping in input
+                potEl.min = '0';
+                potEl.max = '12';
+                potEl.setAttribute('min', '0');
+                potEl.setAttribute('max', '12');
+                potEl.placeholder = 'Max: 12 kW (tipologia split/fixed)';
+                potEl.title = 'Per la tipologia selezionata la potenza massima consigliata è 12 kW';
+                potEl.disabled = false;
+                potEl.required = true;
+
+                // Validazione live: non clampare, ma segnala errore (rosso) e imposta
+                // customValidity per bloccare l'invio del form.
+                potEl.addEventListener('input', function() {
+                    const raw = this.value;
+                    const num = parseFloat(raw);
+                    if (!isNaN(num) && num > 12) {
+                        // Segnala errore: aggiungi classe visuale e messaggio di validità
+                        this.classList.add('invalid');
+                        this.style.borderColor = '#d32f2f';
+                        this.style.backgroundColor = '#ffebee';
+                        this.setCustomValidity('Per la tipologia selezionata la potenza massima ammessa è 12 kW');
+                        if (!state.inputValues[intId]) state.inputValues[intId] = {};
+                        state.inputValues[intId]['potenza_nominale'] = num;
+                        // Mostra messaggio di errore inline se presente
+                        const errEl = document.getElementById(`error-${intId}-potenza_nominale`);
+                        if (errEl) {
+                            errEl.textContent = 'Per la tipologia selezionata la potenza massima ammessa è 12 kW';
+                            errEl.style.display = 'block';
+                        }
+                    } else {
+                        // Rimuovi stato di errore
+                        this.classList.remove('invalid');
+                        this.style.borderColor = '';
+                        this.style.backgroundColor = '';
+                        this.setCustomValidity('');
+                        if (!state.inputValues[intId]) state.inputValues[intId] = {};
+                        state.inputValues[intId]['potenza_nominale'] = isNaN(num) ? null : num;
+                        const errEl = document.getElementById(`error-${intId}-potenza_nominale`);
+                        if (errEl) {
+                            errEl.textContent = '';
+                            errEl.style.display = 'none';
+                        }
+                    }
+                });
+
+            } else if (vrfCondition) {
+                // Per VRF/VRV imponiamo una potenza minima di 13 kW
+                potEl.removeAttribute('max');
+                potEl.max = '';
+                potEl.min = '13';
+                potEl.setAttribute('min', '13');
+                potEl.placeholder = 'Min: 13 kW (VRF/VRV)';
+                potEl.title = 'Per la tipologia selezionata la potenza minima ammessa è 13 kW';
+                potEl.disabled = false;
+                potEl.required = true;
+
+                potEl.addEventListener('input', function() {
+                    const raw = this.value;
+                    const num = parseFloat(raw);
+                    if (!isNaN(num) && num < 13) {
+                        // Segnala errore per valore troppo basso
+                        this.classList.add('invalid');
+                        this.style.borderColor = '#d32f2f';
+                        this.style.backgroundColor = '#ffebee';
+                        this.setCustomValidity('Per la tipologia selezionata la potenza minima ammessa è 13 kW');
+                        if (!state.inputValues[intId]) state.inputValues[intId] = {};
+                        state.inputValues[intId]['potenza_nominale'] = num;
+                        const errEl = document.getElementById(`error-${intId}-potenza_nominale`);
+                        if (errEl) {
+                            errEl.textContent = 'Per la tipologia selezionata la potenza minima ammessa è 13 kW';
+                            errEl.style.display = 'block';
+                        }
+                    } else {
+                        this.classList.remove('invalid');
+                        this.style.borderColor = '';
+                        this.style.backgroundColor = '';
+                        this.setCustomValidity('');
+                        if (!state.inputValues[intId]) state.inputValues[intId] = {};
+                        state.inputValues[intId]['potenza_nominale'] = isNaN(num) ? null : num;
+                        const errEl = document.getElementById(`error-${intId}-potenza_nominale`);
+                        if (errEl) {
+                            errEl.textContent = '';
+                            errEl.style.display = 'none';
+                        }
+                    }
+                });
+            } else {
+                // Rimuoviamo il vincolo se la tipologia non è tra quelle "small"
+                potEl.removeAttribute('max');
+                potEl.removeAttribute('min');
+                potEl.max = '';
+                potEl.min = '';
+                potEl.placeholder = '';
+                potEl.title = '';
+                potEl.required = true;
             }
         }
     }
     
+    // Applica validazione per riga della tabella `righe_pompe` per intervento pompa-calore
+    function attachPompaRowValidation(interventionId, inputId, rowIndex, tr) {
+        try {
+            if (interventionId !== 'pompa-calore' || inputId !== 'righe_pompe') return;
+            const tipoSel = tr.querySelector('select[data-column-id="tipo_pompa"]');
+            const potEl = tr.querySelector('input[data-column-id="potenza_nominale"]');
+            if (!tipoSel || !potEl) return;
+
+            // Evita di ri-agganciare multipli listener alla stessa cella
+            if (potEl.dataset.validatorAttached === '1') return;
+            potEl.dataset.validatorAttached = '1';
+
+            const errEl = tr.querySelector('small.field-error') || tr.querySelector(`#error-${interventionId}-${inputId}-${rowIndex}-potenza_nominale`);
+
+            const smallTypes = ['aria/aria split/multisplit', 'aria/aria fixed double duct'];
+            function isVrf(tipo) {
+                if (!tipo) return false;
+                const t = tipo.toString();
+                return t.includes('VRF') || t.includes('VRV') || t.toLowerCase().includes('vrf') || t.toLowerCase().includes('vrv');
+            }
+
+            function applyConstraintAndValidate() {
+                const tipo = (tipoSel.value || '').toString();
+                const val = parseFloat(potEl.value);
+
+                // Reset visual state
+                potEl.classList.remove('invalid');
+                potEl.style.borderColor = '';
+                potEl.style.backgroundColor = '';
+                potEl.setCustomValidity('');
+                if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+
+                if (smallTypes.includes(tipo)) {
+                    potEl.setAttribute('min', '0');
+                    potEl.setAttribute('max', '12');
+                    potEl.placeholder = 'Max: 12 kW (split/fixed)';
+                    if (!isNaN(val) && val > 12) {
+                        potEl.classList.add('invalid');
+                        potEl.style.borderColor = '#d32f2f';
+                        potEl.style.backgroundColor = '#ffebee';
+                        potEl.setCustomValidity('Per la tipologia selezionata la potenza massima ammessa è 12 kW');
+                        if (errEl) { errEl.textContent = 'Per la tipologia selezionata la potenza massima ammessa è 12 kW'; errEl.style.display = 'block'; }
+                    }
+                } else if (isVrf(tipo)) {
+                    potEl.removeAttribute('max');
+                    potEl.setAttribute('min', '13');
+                    potEl.placeholder = 'Min: 13 kW (VRF/VRV)';
+                    if (!isNaN(val) && val < 13) {
+                        potEl.classList.add('invalid');
+                        potEl.style.borderColor = '#d32f2f';
+                        potEl.style.backgroundColor = '#ffebee';
+                        potEl.setCustomValidity('Per la tipologia selezionata la potenza minima ammessa è 13 kW');
+                        if (errEl) { errEl.textContent = 'Per la tipologia selezionata la potenza minima ammessa è 13 kW'; errEl.style.display = 'block'; }
+                    }
+                } else {
+                    potEl.removeAttribute('min');
+                    potEl.removeAttribute('max');
+                    potEl.placeholder = '';
+                }
+
+                // Aggiorna stato condiviso
+                if (!state.inputValues[interventionId]) state.inputValues[interventionId] = {};
+                if (!state.inputValues[interventionId][inputId]) state.inputValues[interventionId][inputId] = [];
+                const idx = Number(rowIndex) || 0;
+                if (!state.inputValues[interventionId][inputId][idx]) state.inputValues[interventionId][inputId][idx] = {};
+                state.inputValues[interventionId][inputId][idx]['potenza_nominale'] = isNaN(val) ? null : val;
+
+                // Trigger global validation
+                validateRequiredFields();
+            }
+
+            // Attach listeners
+            tipoSel.addEventListener('change', () => applyConstraintAndValidate());
+            potEl.addEventListener('input', () => applyConstraintAndValidate());
+
+            // Applica subito la regola alla riga appena creata
+            applyConstraintAndValidate();
+        } catch (e) {
+            console.warn('attachPompaRowValidation error', e);
+        }
+    }
+
+    // NOTE: automatic ecodesign application function removed per user request.
+    // The SCOP/SCOP_min fields remain user-editable and are not set automatically.
+
     function handleInputChange(e) {
         const { intervention, inputId, rowIndex, columnId } = e.target.dataset || {};
 
@@ -1392,6 +1896,16 @@ async function initCalculator() {
             }
             alert(message);
             return;
+        }
+
+        // Validazione aggiuntiva: vincoli di potenza per pompe di calore (2.A)
+        if (state.selectedInterventions.includes('pompa-calore')) {
+            const pompeValidation = validatePompePowerConstraints();
+            if (!pompeValidation.valid) {
+                const lines = pompeValidation.errors.map(e => `Riga ${e.row}: ${e.msg} (tipo: ${e.tipo}, potenza: ${isNaN(e.pot) ? 'vuoto' : e.pot + ' kW'})`);
+                alert('Errore nei limiti di potenza per Pompe di Calore:\n' + lines.join('\n'));
+                return;
+            }
         }
 
         // Prepara input per calcolo combinato ufficiale (include premi per-intervento selezionati)
