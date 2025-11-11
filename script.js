@@ -62,6 +62,8 @@ async function initCalculator() {
         subjectTypeSelect.innerHTML = '<option value="" disabled selected>Seleziona il soggetto ammesso...</option>';
         
         calculatorData.subjectTypes.forEach(subject => {
+            // Nascondi la voce ETS economico dall'elenco dei soggetti (richiesta)
+            if (subject.id === 'ets_economic') return;
             const option = document.createElement('option');
             option.value = subject.id;
             option.textContent = subject.name;
