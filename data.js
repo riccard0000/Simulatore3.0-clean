@@ -640,8 +640,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                             name: 'Costo specifico (€/m²)',
                             type: 'computed',
                             compute: (riga) => {
-                                if (!riga.costo_totale || !riga.superficie) return '0.00';
-                                return (riga.costo_totale / riga.superficie).toFixed(2);
+                    if (!riga.costo_totale || !riga.superficie) return 0;
+                        return Number((riga.costo_totale / riga.superficie).toFixed(2));
                             }
                         }
                     ],
@@ -842,19 +842,21 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     name: 'Costo specifico (€/m²)', 
                     type: 'computed',
                     compute: (params) => {
-                        if (!params.costo_totale || !params.superficie) return '0.00';
-                        return (params.costo_totale / params.superficie).toFixed(2);
+                        if (!params.costo_totale || !params.superficie) return 0;
+                        return Number((params.costo_totale / params.superficie).toFixed(2));
                     }
                 },
                 { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] }
             ],
             calculate: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico, zona_climatica } = params;
-                if (!superficie || !costo_specifico) return 0;
+                // Treat numeric zero as valid; only bail out when missing (undefined/null)
+                if (!superficie || costo_specifico === undefined || costo_specifico === null) return 0;
                 
                 // Cmax = 700 €/m² per zone A,B,C o 800 €/m² per zone D,E,F (secondo tabella ufficiale)
                 const cmaxInfissi = (zona_climatica === 'D' || zona_climatica === 'E' || zona_climatica === 'F') ? 800 : 700;
-                const costoEffettivo = Math.min(costo_specifico, cmaxInfissi);
+                const costoNum = (costo_specifico === undefined || costo_specifico === null) ? 0 : Number(costo_specifico);
+                const costoEffettivo = Math.min(costoNum, cmaxInfissi);
                 
                 // Determina la percentuale base
                 const isArt48ter = contextData?.buildingSubcategory && 
@@ -888,7 +890,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 
                 // Cmax = 700 €/m² per zone A,B,C o 800 €/m² per zone D,E,F (secondo tabella ufficiale)
                 const cmaxInfissi = (zona_climatica === 'D' || zona_climatica === 'E' || zona_climatica === 'F') ? 800 : 700;
-                const costoEffettivo = Math.min(costo_specifico || 0, cmaxInfissi);
+                const costoNum = (costo_specifico === undefined || costo_specifico === null) ? 0 : Number(costo_specifico);
+                const costoEffettivo = Math.min(costoNum, cmaxInfissi);
                 
                 // Determina percentuale centralmente (include eventuale premio Prodotti UE)
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'sostituzione-infissi');
@@ -902,7 +905,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const imas = 500000;
                 const finale = Math.min(base, imas);
                 
-                const superaCmax = (costo_specifico || 0) > cmaxInfissi;
+                const superaCmax = (Number(costo_specifico || 0) > cmaxInfissi);
                 
                 return {
                     result: finale,
@@ -978,8 +981,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                             name: 'Costo specifico (€/m²)',
                             type: 'computed',
                             compute: (riga) => {
-                                if (!riga.costo_totale || !riga.superficie) return '0.00';
-                                return (riga.costo_totale / riga.superficie).toFixed(2);
+                                if (!riga.costo_totale || !riga.superficie) return 0;
+                                return Number((riga.costo_totale / riga.superficie).toFixed(2));
                             }
                         }
                     ],
@@ -1107,15 +1110,16 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     name: 'Costo specifico (€/m²)', 
                     type: 'computed',
                     compute: (params) => {
-                        if (!params.costo_totale || !params.superficie) return '0.00';
-                        return (params.costo_totale / params.superficie).toFixed(2);
+                        if (!params.costo_totale || !params.superficie) return 0;
+                        return Number((params.costo_totale / params.superficie).toFixed(2));
                     }
                 },
                 { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] }
             ],
             calculate: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico, zona_climatica } = params;
-                if (!superficie || !costo_specifico) return 0;
+                // Treat numeric zero as valid; only bail out when missing (undefined/null)
+                if (!superficie || costo_specifico === undefined || costo_specifico === null) return 0;
                 
                 // Cmax e Imas variano per zona climatica
                 let cmax, imax;
@@ -1198,8 +1202,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                             name: 'Costo specifico (€/m²)',
                             type: 'computed',
                             compute: (riga) => {
-                                if (!riga.costo_totale || !riga.superficie) return '0.00';
-                                return (riga.costo_totale / riga.superficie).toFixed(2);
+                                if (!riga.costo_totale || !riga.superficie) return 0;
+                                return Number((riga.costo_totale / riga.superficie).toFixed(2));
                             }
                         }
                     ],
@@ -1317,11 +1321,12 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             inputs: [
                 { id: 'superficie', name: 'Superficie edificio Sed (m²)', type: 'number', min: 0 },
                 { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0 },
-                { id: 'costo_specifico', name: 'Costo specifico C (€/m²)', type: 'computed', compute: (params) => params.superficie > 0 ? (params.costo_totale / params.superficie).toFixed(2) : '0.00' }
+                { id: 'costo_specifico', name: 'Costo specifico C (€/m²)', type: 'computed', compute: (params) => params.superficie > 0 ? Number((params.costo_totale / params.superficie).toFixed(2)) : 0 }
             ],
             calculate: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico } = params;
-                if (!superficie || !costo_specifico) return 0;
+                // Treat numeric zero as valid; only bail out when missing (undefined/null)
+                if (!superficie || costo_specifico === undefined || costo_specifico === null) return 0;
                 
                 // Formula: Itot = %spesa × C × Sed, con Itot ≤ Imas
                 const cmax = 60; // €/m²

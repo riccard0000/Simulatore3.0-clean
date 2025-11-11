@@ -2149,7 +2149,10 @@ function normalizeParams(input) {
             if (typeof v === 'string') {
                 // Prova a riconoscere numeri anche con separatore decimale comma
                 const cleaned = v.replace(/\u00A0/g,'').trim();
-                const dotNormalized = cleaned.replace(/\./g, '').replace(',', '.');
+                // Locale-aware normalization:
+                // - If the string contains a comma, treat '.' as thousands sep and ',' as decimal (e.g. "1.234,56" -> "1234.56").
+                // - If it contains no comma, assume '.' is the decimal separator and leave it (e.g. "102.68" -> "102.68").
+                const dotNormalized = cleaned.indexOf(',') > -1 ? cleaned.replace(/\./g, '').replace(',', '.') : cleaned;
                 const num = Number(dotNormalized);
                 out[k] = (!isNaN(num) && cleaned !== '') ? num : v;
             } else if (typeof v === 'object') {
@@ -2172,7 +2175,10 @@ function prepareParamsForCalculation(input) {
     if (Array.isArray(normalized.righe_opache)) {
         normalized.righe_opache = normalized.righe_opache.map(row => {
             const r = normalizeParams(row);
-            if ((r.costo_specifico === undefined || r.costo_specifico === '0.00') && r.costo_totale && r.superficie) {
+            // If costo_specifico is missing, null, the string '0.00' or numerically zero,
+            // but we have costo_totale and superficie, compute it from totals.
+            const costoSpecMissing = r.costo_specifico === undefined || r.costo_specifico === null || r.costo_specifico === '0.00' || Number(r.costo_specifico) === 0;
+            if (costoSpecMissing && r.costo_totale && r.superficie) {
                 const sup = Number(r.superficie) || 0;
                 if (sup > 0) r.costo_specifico = (Number(r.costo_totale) / sup);
             }
@@ -2181,7 +2187,8 @@ function prepareParamsForCalculation(input) {
     }
 
     // Se campi singoli
-    if ((normalized.costo_specifico === undefined || normalized.costo_specifico === '0.00') && normalized.costo_totale && normalized.superficie) {
+    const costoSpecMissing = normalized.costo_specifico === undefined || normalized.costo_specifico === null || normalized.costo_specifico === '0.00' || Number(normalized.costo_specifico) === 0;
+    if (costoSpecMissing && normalized.costo_totale && normalized.superficie) {
         const sup = Number(normalized.superficie) || 0;
         if (sup > 0) normalized.costo_specifico = (Number(normalized.costo_totale) / sup);
     }
