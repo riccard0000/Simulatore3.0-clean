@@ -340,6 +340,60 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         let p = 0.40;
         let pDesc = '40% (base)';
 
+        // --- New rule: for companies (imprese) apply simplified Category 1 logic ---
+        // Applicable operatorType values for companies
+        const companyTypes = ['private_tertiary_small', 'private_tertiary_medium', 'private_tertiary_large'];
+        // Helper to check selected/global premiums/flags
+        const hasFlag = (flag) => {
+            return (params?.premiums && params.premiums[flag]) || (contextData?.globalPremiums && contextData.globalPremiums.includes && contextData.globalPremiums.includes(flag)) || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes(flag)) || false;
+        };
+
+        // Identify Category 1 interventions by name starting with '1.'
+        const isCategory1 = (this.interventions && this.interventions[interventionId] && (this.interventions[interventionId].name || '').toString().trim().startsWith('1.'));
+
+        if (companyTypes.includes(operatorType) && isCategory1) {
+            // Base percentages per company size
+            const baseMap = {
+                'private_tertiary_small': 0.45,
+                'private_tertiary_medium': 0.35,
+                'private_tertiary_large': 0.25
+            };
+            p = baseMap[operatorType] || 0.25;
+            pDesc = `${Math.round(p*100)}% (base per imprese)`;
+
+            // If more than one intervention from Category 1 selected, +5 percentage points
+            const selectedCat1Count = sel.filter(id => this.interventions[id] && (this.interventions[id].name || '').toString().trim().startsWith('1.')).length;
+            if (selectedCat1Count > 1) {
+                p = +(p + 0.05).toFixed(2);
+                pDesc = `${Math.round(p*100)}% (+5pp per multi-intervento categoria 1)`;
+            }
+
+            // Apply incremental flags (only when selectable for imprese): INCREMENTO INT3/INT4/INT5
+            // Flags names expected: 'INCREMENTO_INT3', 'INCREMENTO_INT4', 'INCREMENTO_INT5'
+            const inc3 = hasFlag('INCREMENTO_INT3');
+            const inc4 = hasFlag('INCREMENTO_INT4');
+            const inc5 = hasFlag('INCREMENTO_INT5');
+
+            // First two flags are exclusive: if both present, take the larger (15pp over 5pp)
+            let add = 0;
+            if (inc3 || inc4) {
+                add += (inc3 ? 0.15 : 0) + (inc4 ? 0.05 : 0);
+                // enforce exclusivity: if both present, prefer the larger (keep 0.15)
+                if (inc3 && inc4) add = 0.15;
+            }
+            if (inc5) add += 0.15;
+
+            if (add > 0) {
+                p = +(p + add).toFixed(2);
+                pDesc = `${Math.round(p*100)}% (inclusi incrementi)`;
+            }
+
+            // Cap a 65% per regola generale per le imprese
+            if (p > 0.65) p = 0.65;
+
+            return { p, pDesc };
+        }
+
         // Special-case per 1.G: infrastrutture di ricarica -> base 30% (normativa Art.5.1.g)
         if (interventionId === 'infrastrutture-ricarica') {
             if (isArt48ter) {
