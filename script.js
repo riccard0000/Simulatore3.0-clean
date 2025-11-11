@@ -797,8 +797,13 @@ async function initCalculator() {
                 }
 
                 // Se l'elemento DOM esiste, considera anche la validità HTML5 (es. customValidity/max)
+                // EXCEPTION: for `infrastrutture-ricarica` -> `costo_totale` we explicitly
+                // skip the HTML5 checkValidity() because we want to allow free editing
+                // (we handle max warnings visually). This avoids the browser marking the
+                // field as invalid while the user types a value above the indicative max.
                 if (!isInvalid && inputEl && typeof inputEl.checkValidity === 'function') {
-                    if (!inputEl.checkValidity()) {
+                    const skipHtmlValidity = (intId === 'infrastrutture-ricarica' && input.id === 'costo_totale');
+                    if (!skipHtmlValidity && !inputEl.checkValidity()) {
                         // Marca come invalido in modo che venga evidenziato e bloccato
                         inputEl.classList.add('invalid');
                         isInvalid = true;
@@ -1578,11 +1583,10 @@ async function initCalculator() {
                             case 'Oltre 100kW': currentMaxCost = 110000; break;
                         }
                         if (currentMaxCost && val > currentMaxCost) {
-                            // Non bloccare il form: mostriamo solo un avviso visivo non bloccante
-                            this.classList.add('max-warning');
+                            // Do not add a visual CSS warning (no yellow border).
+                            // Keep a descriptive title so users can see the informative message on hover.
                             this.title = `La spesa supera il massimale indicativo: ${Math.round(currentMaxCost).toLocaleString('it-IT')} €`;
                         } else {
-                            this.classList.remove('max-warning');
                             // restore the default informative title (use dataset value if present)
                             const ds = this.dataset.max ? Number(this.dataset.max) : Math.round(currentMaxCost || 0);
                             this.title = `Spesa massima ammissibile: ${ds.toLocaleString('it-IT')} €`;
