@@ -389,7 +389,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             }
 
             // Cap a 65% per regola generale per le imprese
-            if (p > 0.65) p = 0.65;
+            if (p > 0.65) {
+                p = 0.65;
+                // Aggiorna la descrizione per riflettere il limite massimo applicato
+                pDesc = `${Math.round(p*100)}% (massimo applicabile per imprese)`;
+            }
 
             return { p, pDesc };
         }

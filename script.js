@@ -562,6 +562,8 @@ async function initCalculator() {
             
             // Aggiorna interventi e premialità
             renderInterventions();
+            // Rerender subject-specific fields because operator type may have changed
+            renderSubjectSpecificFields();
             // populatePremiums(); // Rimosso: sezione premialità nascosta
         });
 
@@ -902,18 +904,30 @@ async function initCalculator() {
 
     function renderSubjectSpecificFields() {
         // Verifica se ci sono campi specifici per il soggetto selezionato
-        const specificFields = calculatorData.subjectSpecificFields?.[state.selectedSubject];
+    let specificFields = calculatorData.subjectSpecificFields?.[state.selectedSubject];
         
+        // Ensure we have an array to iterate; even when there are no subject-specific
+        // fields defined in `calculatorData`, we still render the container so that
+        // the LOCALIZZAZIONE subsection (company flags) can be displayed when
+        // appropriate.
         if (!specificFields || specificFields.length === 0) {
-            // Nessun campo specifico, nascondi la sezione
+            specificFields = [];
+        }
+
+        // If there are no subject-specific fields and the operator is not a company,
+        // don't render the whole container (avoids showing an empty blue box for
+        // residential selections).
+        const companyTypes = ['private_tertiary_small','private_tertiary_medium','private_tertiary_large'];
+        const isCompany = companyTypes.includes(state.selectedOperator);
+
+        if ((!specificFields || specificFields.length === 0) && !isCompany) {
+            // Remove existing container if present
             const existingContainer = document.getElementById('subject-specific-fields');
-            if (existingContainer) {
-                existingContainer.remove();
-            }
+            if (existingContainer) existingContainer.remove();
             return;
         }
 
-        // Crea una sezione dedicata nell'HTML dopo il building category
+        // Crea (o riusa) una sezione dedicata nell'HTML dopo il building category
         let specificFieldsContainer = document.getElementById('subject-specific-fields');
         if (!specificFieldsContainer) {
             specificFieldsContainer = document.createElement('div');
@@ -932,6 +946,109 @@ async function initCalculator() {
 
         specificFieldsContainer.innerHTML = '<h4 style="margin: 0 0 16px 0; color: #1976d2;">Dati aggiuntivi</h4>';
 
+        // --- LOCALIZZAZIONE: sezione visibile solo per imprese (piccola/media/grande)
+        // Verrà montata qui e sincronizzerà i flag INCREMENTO_INT3/INT4/INT5 nello state
+    const existingLocal = document.getElementById('localizzazione-section');
+    if (existingLocal) existingLocal.remove();
+        if (isCompany) {
+            const locDiv = document.createElement('div');
+            locDiv.id = 'localizzazione-section';
+            locDiv.style.marginTop = '12px';
+            locDiv.style.padding = '12px';
+            locDiv.style.border = '1px solid #c5cae9';
+            locDiv.style.borderRadius = '6px';
+            locDiv.style.background = '#f8f9ff';
+
+            const locTitle = document.createElement('h4');
+            locTitle.textContent = 'LOCALIZZAZIONE';
+            locTitle.style.margin = '0 0 8px 0';
+            locTitle.style.color = '#303f9f';
+            locDiv.appendChild(locTitle);
+
+            // Helper to create one checkbox row
+            function makeLocCheckbox(id, labelText) {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'form-group';
+                wrapper.style.marginBottom = '8px';
+
+                const checkboxWrapper = document.createElement('div');
+                checkboxWrapper.style.display = 'flex';
+                checkboxWrapper.style.alignItems = 'flex-start';
+                checkboxWrapper.style.gap = '8px';
+
+                const input = document.createElement('input');
+                input.type = 'checkbox';
+                input.id = `local-${id}`;
+                input.name = id;
+                input.checked = !!state.subjectSpecificData[id];
+                input.style.marginTop = '4px';
+
+                const labelWrapper = document.createElement('div');
+                labelWrapper.style.flex = '1';
+
+                const label = document.createElement('label');
+                label.htmlFor = input.id;
+                label.style.cursor = 'pointer';
+                label.style.display = 'block';
+                label.style.fontWeight = 'normal';
+                label.style.fontSize = '0.95em';
+                label.innerHTML = labelText;
+
+                labelWrapper.appendChild(label);
+                checkboxWrapper.appendChild(input);
+                checkboxWrapper.appendChild(labelWrapper);
+                wrapper.appendChild(checkboxWrapper);
+
+                // Event: update state and enforce exclusivity between INT3 and INT4
+                input.addEventListener('change', (e) => {
+                    state.subjectSpecificData[id] = e.target.checked;
+
+                    // exclusivity: if INT3 checked -> disable INT4; if INT4 checked -> disable INT3
+                    if (id === 'INCREMENTO_INT3' && e.target.checked) {
+                        state.subjectSpecificData['INCREMENTO_INT4'] = false;
+                        const other = document.getElementById('local-INCREMENTO_INT4');
+                        if (other) { other.checked = false; other.disabled = true; }
+                    } else if (id === 'INCREMENTO_INT3' && !e.target.checked) {
+                        const other = document.getElementById('local-INCREMENTO_INT4');
+                        if (other) { other.disabled = false; }
+                    }
+
+                    if (id === 'INCREMENTO_INT4' && e.target.checked) {
+                        state.subjectSpecificData['INCREMENTO_INT3'] = false;
+                        const other = document.getElementById('local-INCREMENTO_INT3');
+                        if (other) { other.checked = false; other.disabled = true; }
+                    } else if (id === 'INCREMENTO_INT4' && !e.target.checked) {
+                        const other = document.getElementById('local-INCREMENTO_INT3');
+                        if (other) { other.disabled = false; }
+                    }
+
+                    // INT5 independent — no extra logic
+                    // Trigger any dependant UI updates
+                    console.log(`LOCALIZZAZIONE ${id} =>`, state.subjectSpecificData[id]);
+                });
+
+                return wrapper;
+            }
+
+            // Labels per richiesta utente (italiano, precise)
+            const labelINT3 = `Gli interventi di incremento dell'efficienza energetica sono realizzati in zone assistite che soddisfano le condizioni di cui all'articolo 107, paragrafo 3, lettera a), del Trattato sul funzionamento dell’Unione Europea?`;
+            const labelINT4 = `Gli interventi di incremento dell'efficienza energetica sono realizzati in zone assistite che soddisfano le condizioni di cui all'articolo 107, paragrafo 3, lettera c), del Trattato sul funzionamento dell’Unione Europea?`;
+            const labelINT5 = `Gli interventi di incremento dell'efficienza energetica realizzati hanno determinato un miglioramento della prestazione energetica dell'edificio misurata in energia primaria di almeno il 40 %  rispetto alla situazione precedente all'investimento?`;
+
+            locDiv.appendChild(makeLocCheckbox('INCREMENTO_INT3', labelINT3));
+            locDiv.appendChild(makeLocCheckbox('INCREMENTO_INT4', labelINT4));
+            locDiv.appendChild(makeLocCheckbox('INCREMENTO_INT5', labelINT5));
+
+            specificFieldsContainer.appendChild(locDiv);
+
+            // apply initial mutual-disable state if needed
+            if (state.subjectSpecificData['INCREMENTO_INT3']) {
+                const other = document.getElementById('local-INCREMENTO_INT4'); if (other) other.disabled = true;
+            }
+            if (state.subjectSpecificData['INCREMENTO_INT4']) {
+                const other = document.getElementById('local-INCREMENTO_INT3'); if (other) other.disabled = true;
+            }
+        }
         specificFields.forEach(field => {
             // Verifica se il campo deve essere visibile in base alle condizioni
             if (field.visible_if) {
@@ -1936,6 +2053,14 @@ async function initCalculator() {
             });
 
         // Prepara dati di contesto per incentivo al 100% automatico
+        // Merge any subject-specific flags (LOCALIZZAZIONE) into selectedPremiums
+        const mergedPremiums = Array.isArray(state.selectedPremiums) ? state.selectedPremiums.slice() : [];
+        ['INCREMENTO_INT3','INCREMENTO_INT4','INCREMENTO_INT5'].forEach(f => {
+            if (state.subjectSpecificData && state.subjectSpecificData[f]) {
+                if (!mergedPremiums.includes(f)) mergedPremiums.push(f);
+            }
+        });
+
         const contextData = {
             buildingSubcategory: state.buildingSubcategory,
             is_comune: state.subjectSpecificData.is_comune || false,
@@ -1946,8 +2071,8 @@ async function initCalculator() {
             // Include selected interventions and premiums so determinePercentuale/explain
             // can evaluate multi-intervento and UE premi correctly.
             selectedInterventions: Array.isArray(state.selectedInterventions) ? state.selectedInterventions.slice() : [],
-            selectedPremiums: Array.isArray(state.selectedPremiums) ? state.selectedPremiums.slice() : [],
-            globalPremiums: Array.isArray(state.selectedPremiums) ? state.selectedPremiums.slice() : [],
+            selectedPremiums: mergedPremiums,
+            globalPremiums: mergedPremiums,
             inputValues: state.inputValues || {},
             subjectSpecificData: state.subjectSpecificData || {}
         };
