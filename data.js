@@ -393,6 +393,47 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         // Identify Category 1 interventions by name starting with '1.'
         const isCategory1 = (this.interventions && this.interventions[interventionId] && (this.interventions[interventionId].name || '').toString().trim().startsWith('1.'));
 
+        // Identify Category 2 interventions (Titolo III) by name starting with '2.'
+        const isCategory2 = (this.interventions && this.interventions[interventionId] && (this.interventions[interventionId].name || '').toString().trim().startsWith('2.'));
+
+        // --- New decree-based rule: for ALL interventions in Category 2, the
+        // percentuale incentivabile used for the cap verification follows the
+        // statutory mapping supplied by the user/request (applies to Titolo III):
+        // - Art.48-ter or Comune <15k => 100%
+        // - PA and Privati (non-imprese) => 65%
+        // - Piccole imprese => 65%
+        // - Medie imprese => 55%
+        // - Grandi imprese => 65%
+        // These rules override the generic Category 1/company heuristics and
+        // apply universally for Category 2 interventions.
+        if (isCategory2) {
+            // Art.48-ter / Piccolo comune take absolute precedence
+            if (isArt48ter || isPiccoloComuneEffective) {
+                p = 1.0;
+                pDesc = isArt48ter ? `100% (Art. 48-ter: edifici speciali)` : '100% (Comune < 15.000 abitanti)';
+                return { p, pDesc };
+            }
+
+            // Map operatorType to percentuale per decreto
+            const mapCat2 = {
+                'pa': 0.65,
+                'private_residential': 0.65,
+                'private_tertiary_person': 0.65,
+                'private_tertiary_small': 0.65,
+                'private_tertiary_medium': 0.55,
+                'private_tertiary_large': 0.45
+            };
+
+            p = mapCat2[operatorType] !== undefined ? mapCat2[operatorType] : 0.65;
+            pDesc = `${Math.round(p*100)}% (regola Titolo III - Categoria 2)`;
+
+            // If premio UE applies, we do NOT automatically increase the cap
+            // percentage here unless explicitly required by normative text.
+            // The decree mapping provided by the user is considered authoritative
+            // for the cap verification, so return immediately.
+            return { p, pDesc };
+        }
+
         if (companyTypes.includes(operatorType) && isCategory1) {
             // Base percentages per company size
             const baseMap = {

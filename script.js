@@ -50,6 +50,57 @@ async function initCalculator() {
         return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
     }
 
+    // Shared helper: apply SCOP minimum constraint for a given table row.
+    // Some per-row handlers used to define a local applyScopMinConstraint which
+    // caused ReferenceError when other handlers attempted to call it. Expose
+    // a single helper that accepts the row element.
+    function applyScopMinConstraintForRow(tr) {
+        try {
+            if (!tr) return;
+            const scopInput = tr.querySelector('[data-column-id="scop"]');
+            if (!scopInput) return;
+            const tipoEl = tr.querySelector('[data-column-id="tipo_pompa"]');
+            const gwpEl = tr.querySelector('[data-column-id="gwp"]');
+            const gwpVal = gwpEl ? (gwpEl.value || '') : null;
+            const tipoVal = String(tipoEl ? (tipoEl.value || '') : '').trim();
+
+            // attempt to reuse ecodesign helper from data.js
+            let mapped = null;
+            try {
+                const spec = typeof getPumpEcodesignSpec === 'function' ? getPumpEcodesignSpec(tipoVal, gwpVal) : null;
+                if (spec) mapped = spec.scop || spec.cop || null;
+            } catch (e) {
+                console.warn('getPumpEcodesignSpec not available', e);
+            }
+
+            if (mapped !== null && mapped !== undefined) {
+                scopInput.setAttribute('min', String(mapped));
+            } else {
+                scopInput.removeAttribute('min');
+            }
+            try { scopInput.setAttribute('step', 'any'); } catch (e) {}
+
+            // Inline error element lives next to the scop input's td
+            const scopErr = scopInput.parentNode ? scopInput.parentNode.querySelector('.field-error') : null;
+            const raw = String(scopInput.value || '').replace(',', '.').trim();
+            const num = raw === '' ? NaN : parseFloat(raw);
+            const decPart = (raw.indexOf('.') >= 0) ? raw.split('.')[1] : '';
+            if (decPart && decPart.length > 3) {
+                scopInput.classList.add('invalid');
+                try { scopInput.setCustomValidity('Inserire al massimo 3 cifre decimali'); } catch (e) {}
+                if (scopErr) { scopErr.textContent = 'Inserire al massimo 3 cifre decimali'; scopErr.style.display = 'block'; }
+            } else if (!isNaN(num) && mapped !== null && mapped !== undefined && num < mapped) {
+                scopInput.classList.add('invalid');
+                try { scopInput.setCustomValidity(`Valore SCOP minimo richiesto: ${mapped}`); } catch (e) {}
+                if (scopErr) { scopErr.textContent = `Valore SCOP minimo richiesto: ${mapped}`; scopErr.style.display = 'block'; }
+            } else {
+                scopInput.classList.remove('invalid');
+                try { scopInput.setCustomValidity(''); } catch (e) {}
+                if (scopErr) { scopErr.textContent = ''; scopErr.style.display = 'none'; }
+            }
+        } catch (e) { console.warn('applyScopMinConstraintForRow error', e); }
+    }
+
     // --- INIZIALIZZAZIONE ---
 
     function initialize() {
@@ -258,59 +309,14 @@ async function initCalculator() {
                 // Helper to apply mapped minimum based on tipo_pompa in the same row
                 function applyScopMinConstraint() {
                     try {
+                        // delegate to shared helper with explicit row element
                         const trEl = td.parentNode;
-                        if (!trEl) return;
-                        const tipoEl = trEl.querySelector('[data-column-id="tipo_pompa"]');
-                        const scopInput = trEl.querySelector(`[data-column-id="${col.id}"]`);
-                        const gwpEl = trEl.querySelector('[data-column-id="gwp"]');
-                        const gwpVal = gwpEl ? (gwpEl.value || '') : null;
-                        if (!scopInput) return;
-                        const tipoVal = String(tipoEl ? (tipoEl.value || '') : '').trim();
-
-                        // Use the ecodesign helper (defined in data.js) to obtain the correct minimum
-                        let mapped = null;
-                        try {
-                            const spec = typeof getPumpEcodesignSpec === 'function' ? getPumpEcodesignSpec(tipoVal, gwpVal) : null;
-                            if (spec) {
-                                mapped = spec.scop || spec.cop || null;
-                            }
-                        } catch (e) {
-                            console.warn('getPumpEcodesignSpec not available', e);
-                        }
-
-                        if (mapped !== null && mapped !== undefined) {
-                            scopInput.setAttribute('min', String(mapped));
-                        } else {
-                            scopInput.removeAttribute('min');
-                        }
-
-                        try { scopInput.setAttribute('step', 'any'); } catch (e) {}
-
-                        // immediate per-field check and inline message
-                        const raw = String(scopInput.value || '').replace(',', '.').trim();
-                        const num = raw === '' ? NaN : parseFloat(raw);
-                        const decPart = (raw.indexOf('.') >= 0) ? raw.split('.') [1] : '';
-                        if (decPart && decPart.length > 3) {
-                            scopInput.classList.add('invalid');
-                            try { scopInput.setCustomValidity('Inserire al massimo 3 cifre decimali'); } catch (e) {}
-                            scopErr.textContent = 'Inserire al massimo 3 cifre decimali';
-                            scopErr.style.display = 'block';
-                        } else if (!isNaN(num) && mapped !== null && mapped !== undefined && num < mapped) {
-                            scopInput.classList.add('invalid');
-                            try { scopInput.setCustomValidity(`Valore SCOP minimo richiesto: ${mapped}`); } catch (e) {}
-                            scopErr.textContent = `Valore SCOP minimo richiesto: ${mapped}`;
-                            scopErr.style.display = 'block';
-                        } else {
-                            scopInput.classList.remove('invalid');
-                            try { scopInput.setCustomValidity(''); } catch (e) {}
-                            scopErr.textContent = '';
-                            scopErr.style.display = 'none';
-                        }
+                        applyScopMinConstraintForRow(trEl);
                     } catch (e) { console.warn('applyScopMinConstraint error', e); }
                 }
 
                 // Attach listeners: when SCOP changes, or tipo_pompa changes in same row
-                cellInput.addEventListener('input', () => applyScopMinConstraint());
+                cellInput.addEventListener('input', () => applyScopMinConstraintForRow(tr));
                 // Also observe changes to tipo_pompa select in this row
                 // Execute synchronously to avoid race conditions where validation
                 // runs before the per-row fields are toggled.
@@ -389,18 +395,18 @@ async function initCalculator() {
                         }
 
                         // After toggling fields, re-run scop constraint to pick correct minima if gwp changed
-                        applyScopMinConstraint();
+                        applyScopMinConstraintForRow(trEl);
                     }
 
                     if (tipoEl) {
                         tipoEl.addEventListener('change', toggleFieldsByTipo);
                     }
                     if (gwpEl) {
-                        gwpEl.addEventListener('change', applyScopMinConstraint);
+                        gwpEl.addEventListener('change', () => applyScopMinConstraintForRow(trEl));
                     }
 
                     // Run initial constraint application synchronously
-                    applyScopMinConstraint();
+                    applyScopMinConstraintForRow(trEl);
                     toggleFieldsByTipo();
                 }
 
@@ -2185,7 +2191,7 @@ async function initCalculator() {
                         }
 
                         // re-run scop minima update
-                        applyScopMinConstraint();
+                        applyScopMinConstraintForRow(trEl);
                         validateRequiredFields();
                     }
 
