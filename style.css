@@ -20,10 +20,10 @@ body {
 }
 
 #calculator-container {
-    max-width: 800px;
+    max-width: 1100px;
     margin: 40px auto;
     background: transparent;
-    padding: 0;
+    padding: 0 12px;
     border-radius: 0;
     box-shadow: none;
 }
@@ -537,6 +537,13 @@ input.invalid:focus, select.invalid:focus {
 .dynamic-table select {
     padding: 6px 8px;
     font-size: 0.9rem;
+}
+
+/* Visual style for disabled inputs inside dynamic tables so columns stay visible */
+.table-cell-input.disabled-input {
+    opacity: 0.6;
+    background-color: #fafafa;
+    pointer-events: none;
 }
 
 .dynamic-table input[readonly] {

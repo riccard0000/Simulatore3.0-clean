@@ -2,28 +2,48 @@
 // Modificando questo file è possibile aggiornare le opzioni, i parametri
 // e le logiche di calcolo senza toccare il codice principale.
 
-// Normative SCOP minima mapping (tabella ecodesign) — shared helper
-const PUMP_SCOP_MIN_TABLE = {
-    'aria/aria split/multisplit': 3.8,
-    'aria/aria fixed double duct': 3.42,
-    'aria/aria vrf/vrv': 3.5,
-    'aria/aria rooftop': 3.2,
-    'acqua/aria': 3.625,
-    'aria/acqua': 2.825,
-    'acqua/acqua': 3.325,
-    'salamoia/aria': 3.2,
-    'salamoia/acqua': 3.325
+// Ecodesign minima per tipologia di pompa di calore.
+// La struttura supporta varianti dipendenti dal GWP e distinzioni tra SCOP (stagionale) e COP (istanteo).
+const PUMP_ECODESIGN_SPECS = {
+    'aria/aria split/multisplit': {
+        // per split/multisplit <=12 kW la minima dipende dalla fascia GWP
+        gwp: { '>150': { scop: 3.8 }, '<=150': { scop: 3.42 } }
+    },
+    'aria/aria fixed double duct': {
+        // fixed double duct richiede COP minimo (non SCOP) e dipende dalla fascia GWP
+        gwp: { '>150': { cop: 2.6 }, '<=150': { cop: 2.34 } }
+    },
+    'aria/aria vrf/vrv': { scop: 3.5 },
+    'aria/aria rooftop': { scop: 3.2 },
+    'acqua/aria': { scop: 3.625 },
+    'aria/acqua': { scop: 2.825 },
+    'acqua/acqua': { scop: 3.325 },
+    'salamoia/aria': {
+        // dove applicabile, salamoia/aria può avere variante <=12kW con GWP bands
+        gwp: { '>150': { scop: 3.8 }, '<=150': { scop: 3.42 } , default: { scop: 3.625 } }
+    },
+    'salamoia/acqua': { scop: 3.325 }
 };
 
-function getScopMinFromTipo(tipo) {
-    const tcanon = String(tipo || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
-    for (const k of Object.keys(PUMP_SCOP_MIN_TABLE)) {
-        const kcanon = String(k).toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+function getPumpEcodesignSpec(tipo, gwp) {
+    const tcanon = String(tipo || '').toLowerCase();
+    // find best matching key
+    for (const key of Object.keys(PUMP_ECODESIGN_SPECS)) {
+        const kcanon = key.toLowerCase();
         if (tcanon === kcanon || tcanon.indexOf(kcanon) !== -1 || kcanon.indexOf(tcanon) !== -1) {
-            return PUMP_SCOP_MIN_TABLE[k];
+            const spec = PUMP_ECODESIGN_SPECS[key];
+            if (spec.gwp) {
+                // normalize gwp input to the expected band strings
+                const gw = (gwp || '').toString().trim();
+                if (gw === '>150' || gw === 'GWP>150' || gw === 'GWP > 150') return spec.gwp['>150'];
+                if (gw === '<=150' || gw === 'GWP<=150' || gw === 'GWP <= 150') return spec.gwp['<=150'];
+                // fallback to explicit default if present
+                if (spec.gwp.default) return spec.gwp.default;
+            }
+            return spec;
         }
     }
-    return 1;
+    return null;
 }
 
 const calculatorData = { // Updated: 2025-11-04 15:45:25
@@ -1717,6 +1737,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             restrictionNote: 'Per imprese e ETS economici: NON ammesse pompe di calore a GAS (art. 25, comma 2). Solo pompe di calore elettriche.',
             inputs: [
                 { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0, help: 'Opzionale: se fornisci i costi per singola pompa, questo campo può restare vuoto.' },
+                // Zona climatica dichiarata una sola volta per l'intervento (evita ripetere la selezione per ogni pompa)
+                { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'], help: 'Seleziona la zona climatica dell\'edificio (valore unico per tutte le pompe inserite)' },
                 {
                     id: 'righe_pompe',
                     name: 'Tabella pompe di calore',
@@ -1724,14 +1746,14 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     columns: [
                         { id: 'tipo_pompa', name: 'Tipo di pompa di calore', type: 'select', options: ['aria/aria split/multisplit', 'aria/aria fixed double duct', 'aria/aria VRF/VRV', 'aria/aria rooftop', 'aria/acqua', 'acqua/aria', 'acqua/acqua', 'salamoia/aria', 'salamoia/acqua'] },
                         { id: 'potenza_nominale', name: 'Potenza termica nominale Prated (kW)', type: 'number', min: 0, step: 0.1 },
-                        { id: 'scop', name: 'SCOP stagionale', type: 'number', min: 2.5, step: 0.01 },
-                        { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] },
-                        { id: 'costo_totale', name: 'Costo totale pompa (€)', type: 'number', min: 0, optional: true }
+                        { id: 'scop', name: 'SCOP stagionale', type: 'number', min: 2.5, step: 0.01, optional: true },
+                        { id: 'cop', name: 'COP (solo per fixed double duct)', type: 'number', min: 0, step: 0.01, optional: true },
+                        { id: 'gwp', name: 'Fascia GWP refrigerante', type: 'select', options: ['>150', '<=150'], optional: true, help: 'Seleziona la fascia GWP del refrigerante per le tipologie che la richiedono' }
                     ],
-                    help: 'Aggiungi una riga per ogni pompa presente nell\'impianto. I parametri di ciascuna riga verranno valutati separatamente e sommati.'
+                    help: 'Aggiungi una riga per ogni pompa presente nell\'impianto. I parametri di ciascuna riga verranno valutati separatamente e sommati. La zona climatica è specificata una sola volta per l\'intervento.'
                 }
             ],
-            calculate: (params, operatorType) => {
+            calculate: (params, operatorType, contextData) => {
                 const rows = Array.isArray(params?.righe_pompe) ? params.righe_pompe : [];
                 if (rows.length === 0) return 0;
 
@@ -1756,28 +1778,80 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 // scop_minimo is derived from the normative table via getScopMinFromTipo()
 
                 let totalIncentive = 0;
+                // Use the single zona_climatica provided at the top-level of the intervention,
+                // but fall back to a per-row value if present (backwards compatibility).
+                const topZona = params?.zona_climatica || null;
                 rows.forEach(row => {
                     const tipo_pompa = row?.tipo_pompa || '';
                     const potenza_nominale = Number(row?.potenza_nominale) || 0;
-                    const scop = Number(row?.scop) || 0;
-                    // derive normative SCOP minimo from the pump type (tabellato); do not require user input
-                    const scop_minimo = getScopMinFromTipo(tipo_pompa) || 1;
-                    const zona_climatica = row?.zona_climatica;
-                    if (!potenza_nominale || !scop || !zona_climatica) return;
+                    const scop = row?.scop !== undefined && row?.scop !== null ? Number(row.scop) : null;
+                    const cop = row?.cop !== undefined && row?.cop !== null ? Number(row.cop) : null; // for fixed double duct
+                    const gwp = row?.gwp || null; // optional: '>150' or '<=150'
+                    const zona_climatica = topZona || row?.zona_climatica;
+                    if (!potenza_nominale || (!scop && !cop) || !zona_climatica) return;
+
+                    // find normative spec for this pump type and gwp band
+                    const spec = getPumpEcodesignSpec(tipo_pompa, gwp) || {};
+                    // determine which metric to use (scop or cop)
+                    let userValue = null;
+                    let minValue = null;
+                    let metric = null;
+                    if (spec.cop) {
+                        // Fixed double duct expects COP
+                        metric = 'cop';
+                        userValue = cop;
+                        minValue = spec.cop;
+                    } else if (spec.scop) {
+                        metric = 'scop';
+                        userValue = scop;
+                        minValue = spec.scop;
+                    } else {
+                        // fallback: try scop
+                        metric = 'scop';
+                        userValue = scop;
+                        minValue = spec.scop || 1;
+                    }
+
+                    // If user didn't provide required metric, skip row
+                    if (userValue === null || userValue === undefined) return;
+
+                    // Check compliance vs ecodesign minima
+                    let notCompliant = false;
+                    if (minValue !== undefined && minValue !== null) {
+                        if (userValue < minValue) notCompliant = true;
+                    }
 
                     const quf = qufTable[zona_climatica] || 0;
                     const qu = potenza_nominale * quf;
-                    const kp = scop / scop_minimo;
-                    const ei = qu * (1 - 1/scop) * kp;
+                    const kp = (minValue && minValue > 0) ? (userValue / minValue) : 1;
+                    const ei = qu * (1 - 1/(scop||userValue)) * kp; // use scop for the 1-1/SCOP factor when available, else best-effort with userValue
                     const ci = assignCi(tipo_pompa, potenza_nominale);
                     const incentivo_annuo = ci !== null ? ci * ei : 0;
-                    const durata = operatorType === 'pa' ? 5 : 2;
+                    // Durata dell'incentivo basata sulla potenza della singola pompa:
+                    // se potenza > 35 kW → 5 anni, altrimenti 2 anni
+                    const durata = (potenza_nominale > 35) ? 5 : 2;
                     totalIncentive += incentivo_annuo * durata;
                 });
 
-                return totalIncentive;
+                // Apply cap based on user-declared total cost and percentuale incentivabile
+                contextData = contextData || {};
+                const costInput = Number(params?.costo_totale) || 0;
+                // Determine applicable percentuale (use contextData.selectedInterventions when available)
+                let detP = 0;
+                try {
+                    const sel = Array.isArray(contextData?.selectedInterventions) ? contextData.selectedInterventions : [];
+                    const det = calculatorData.determinePercentuale(sel, params || {}, operatorType || '', contextData || {}, 'pompa-calore');
+                    detP = (det && typeof det.p === 'number') ? det.p : 0;
+                } catch (e) {
+                    detP = 0;
+                }
+
+                const cap = detP * costInput;
+                const cappedTotal = (cap > 0) ? Math.min(totalIncentive, cap) : totalIncentive;
+
+                return cappedTotal;
             },
-            explain: (params, operatorType) => {
+            explain: (params, operatorType, contextData) => {
                 const rows = Array.isArray(params?.righe_pompe) ? params.righe_pompe : [];
                 const qufTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
                 const steps = [];
@@ -1786,18 +1860,27 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 rows.forEach((row, idx) => {
                     const tipo_pompa = row?.tipo_pompa || '';
                     const Pr = Number(row?.potenza_nominale) || 0;
-                    const scop = Number(row?.scop) || 0;
-                    // compute scop_minimo from tipo_pompa (tabellato) and report it in the explain
-                    const scop_minimo = getScopMinFromTipo(tipo_pompa) || 1;
-                    const zona = row?.zona_climatica;
-                    if (!Pr || !scop || !zona) {
+                    const scop = row?.scop !== undefined && row?.scop !== null ? Number(row.scop) : null;
+                    const cop = row?.cop !== undefined && row?.cop !== null ? Number(row.cop) : null;
+                    const zona = params?.zona_climatica || row?.zona_climatica;
+                    const gwp = row?.gwp || null;
+                    if (!Pr || (!scop && !cop) || !zona) {
                         steps.push(`Riga ${idx+1}: parametri incompleti, ignorata.`);
                         return;
                     }
+
+                    // retrieve normative spec
+                    const spec = getPumpEcodesignSpec(tipo_pompa, gwp) || {};
+                    let metric = spec.cop ? 'COP' : 'SCOP';
+                    let userValue = metric === 'COP' ? cop : scop;
+                    let minValue = metric === 'COP' ? spec.cop : spec.scop;
+                    if (minValue === undefined || minValue === null) minValue = 1;
+
                     const Quf = qufTable[zona] || 0;
                     const Qu = Pr * Quf;
-                    const kp = scop / scop_minimo;
-                    const EI = Qu * (1 - 1/scop) * kp;
+                    const kp = (minValue > 0) ? (userValue / minValue) : 1;
+                    const oneMinusInvScop = 1 - 1/(scop||userValue);
+                    const EI = Qu * oneMinusInvScop * kp;
 
                     const assignCiLocal = (tipoRaw, potenza) => {
                         if (potenza === undefined || potenza === null) return null;
@@ -1816,34 +1899,58 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                     const Ci = assignCiLocal(tipo_pompa, Pr);
                     const Ia_annuo = Ci !== null ? Ci * EI : 0;
-                    const durata = operatorType === 'pa' ? 5 : 2;
+                    // Durata per riga basata sulla potenza (Pr): >35 kW → 5 anni, altrimenti 2
+                    const durata = (Pr > 35) ? 5 : 2;
                     const totale = Ia_annuo * durata;
                     total += totale;
 
+                    // compliance check
+                    const notCompliant = userValue < minValue;
+
                     steps.push(`Riga ${idx+1} (${tipo_pompa} - Pr=${Pr} kW, zona ${zona}):`);
-                    steps.push(`• SCOP inserito = ${scop}; SCOP minimo ecodesign (tabellato) = ${scop_minimo}`);
-                    steps.push(`• kp = SCOP / SCOP_minimo = ${scop.toFixed(3)} / ${scop_minimo.toFixed(3)} = ${kp.toFixed(3)}`);
-                    // Detailed breakdown for Qu and EI to make the derivation explicit
-                    const qufVal = Quf;
-                    const quComputed = Qu;
-                    const oneMinusInvScop = (1 - 1/(scop||1));
-                    const eiComputed = EI;
-                    steps.push(`• Quf (ore/anno per zona ${zona}) = ${qufVal}`);
-                    steps.push(`• Qu = Pr × Quf = ${Pr} kW × ${qufVal} h = ${quComputed.toFixed(2)} kWh/anno`);
-                    steps.push(`• Fattore = (1 - 1/SCOP) = 1 - 1/${scop} = ${oneMinusInvScop.toFixed(6)}`);
-                    steps.push(`• kp = SCOP / SCOP_minimo = ${scop.toFixed(3)} / ${scop_minimo.toFixed(3)} = ${kp.toFixed(3)}`);
-                    steps.push(`• EI = Qu × Fattore × kp = ${quComputed.toFixed(2)} × ${oneMinusInvScop.toFixed(6)} × ${kp.toFixed(3)} = ${eiComputed.toFixed(2)}`);
+                    steps.push(`• ${metric} inserito = ${userValue}; minimo Ecodesign (${metric}) = ${minValue}` + (notCompliant ? ' → ATTENZIONE: NON conforme al requisito Ecodesign' : ''));
+                    steps.push(`• kp = ${metric} / ${metric}_min = ${userValue.toFixed(3)} / ${minValue.toFixed(3)} = ${kp.toFixed(3)}`);
+                    steps.push(`• Quf (ore/anno per zona ${zona}) = ${Quf}`);
+                    steps.push(`• Qu = Pr × Quf = ${Pr} kW × ${Quf} h = ${Qu.toFixed(2)} kWh/anno`);
+                    steps.push(`• Fattore = (1 - 1/SCOP) = 1 - 1/${(scop||userValue)} = ${oneMinusInvScop.toFixed(6)}`);
+                    steps.push(`• EI = Qu × Fattore × kp = ${Qu.toFixed(2)} × ${oneMinusInvScop.toFixed(6)} × ${kp.toFixed(3)} = ${EI.toFixed(2)}`);
                     steps.push(`• Ci = ${Ci===null? 'N/D' : Ci} → Ia_annuo = Ci × EI = ${Ia_annuo.toFixed(2)}; durata = ${durata} anni → incentivo € ${totale.toFixed(2)}`);
-                    // separator between rows for readability
                     steps.push('----------------------------------------');
                 });
 
                 // Final summary: total incentive across all pump rows
                 steps.push('');
                 steps.push('Riepilogo totale:');
-                steps.push(`Totale incentivo per tutte le pompe: € ${total.toFixed(2)}`);
+                steps.push(`Totale incentivo calcolato per tutte le pompe: € ${total.toFixed(2)}`);
 
-                return { result: total, steps, formula: 'Somma degli incentivi calcolati per ciascuna pompa (Ia_tot per pompa × durata)', variables: { rowsCount: rows.length, totale: total } };
+                // Apply cap based on top-level costo_totale and percentuale incentivabile (determinePercentuale)
+                contextData = contextData || {};
+                const costInput = Number(params?.costo_totale) || 0;
+                let detP = 0;
+                try {
+                    const sel = Array.isArray(contextData?.selectedInterventions) ? contextData.selectedInterventions : [];
+                    const det = calculatorData.determinePercentuale(sel, params || {}, operatorType || '', contextData || {}, 'pompa-calore');
+                    detP = (det && typeof det.p === 'number') ? det.p : 0;
+                } catch (e) {
+                    detP = 0;
+                }
+                const cap = detP * costInput;
+                let finalResult = total;
+                if (cap > 0) {
+                    const capped = Math.min(total, cap);
+                    if (capped !== total) {
+                        steps.push(`Applicato tetto: min(incentivo_calcolato, p × costo_totale) = min(€${total.toFixed(2)}, ${ (detP*100).toFixed(2) }% × €${costInput.toLocaleString('it-IT') }) = €${capped.toFixed(2)}`);
+                    } else {
+                        steps.push(`Nessun tetto applicato: tetto p×costo = €${cap.toFixed(2)} >= incentivo calcolato`);
+                    }
+                    finalResult = Math.min(total, cap);
+                } else {
+                    steps.push('Nessun costo totale fornito o percentuale incentivabile assente: nessun tetto applicato.');
+                }
+
+                steps.push(`Totale incentivo erogabile finale: € ${finalResult.toFixed(2)}`);
+
+                return { result: finalResult, steps, formula: 'min(Imas_calcolato, p × costo_totale)', variables: { rowsCount: rows.length, totale_calcolato: total, costo_totale_input: costInput, percentuale_p: detP, tetto: cap } };
             }
         },
         'sistemi-ibridi': {

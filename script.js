@@ -196,41 +196,56 @@ async function initCalculator() {
                 cellInput.addEventListener('change', (e) => {
                     const row = parseInt(e.target.dataset.rowIndex);
                     const colId = e.target.dataset.columnId;
-                    
-                    // Converti in numero se è un input number
+
+                    // Convert number inputs: preserve empty string as '' so validation
+                    // can detect missing values instead of coercing them to 0.
                     let value = e.target.value;
                     if (e.target.type === 'number') {
-                        value = parseFloat(value) || 0;
+                        const raw = String(e.target.value || '');
+                        if (raw.trim() === '') {
+                            value = '';
+                        } else {
+                            const parsed = parseFloat(raw.replace(',', '.'));
+                            value = isNaN(parsed) ? raw : parsed;
+                        }
                     }
-                    
+
                     state.inputValues[interventionId][inputId][row][colId] = value;
-                    
+
                     // Aggiorna campi computed nella stessa riga
                     updateTableRowComputed(interventionId, inputId, row, columns, tr);
-                    
+
                     // Trigger recalcolo generale
                     handleInputChange(e);
                 });
-                
+
                 cellInput.addEventListener('keyup', (e) => {
                     const row = parseInt(e.target.dataset.rowIndex);
                     const colId = e.target.dataset.columnId;
-                    
-                    // Converti in numero se è un input number
+
+                    // Convert number inputs but preserve empty
                     let value = e.target.value;
                     if (e.target.type === 'number') {
-                        value = parseFloat(value) || 0;
+                        const raw = String(e.target.value || '');
+                        if (raw.trim() === '') {
+                            value = '';
+                        } else {
+                            const parsed = parseFloat(raw.replace(',', '.'));
+                            value = isNaN(parsed) ? raw : parsed;
+                        }
                     }
-                    
+
                     state.inputValues[interventionId][inputId][row][colId] = value;
-                    
+
                     // Aggiorna campi computed nella stessa riga
                     updateTableRowComputed(interventionId, inputId, row, columns, tr);
                 });
             }
             
             td.appendChild(cellInput);
-            // If this column is the seasonal SCOP, add inline error placeholder and attach validation
+                // style hook for disabled inputs (keeps column visible but visibly disabled)
+                cellInput.classList.add('table-cell-input');
+                // If this column is the seasonal SCOP, add inline error placeholder and attach validation
             if (col.id === 'scop') {
                 const scopErr = document.createElement('small');
                 scopErr.className = 'field-error';
@@ -247,34 +262,33 @@ async function initCalculator() {
                         if (!trEl) return;
                         const tipoEl = trEl.querySelector('[data-column-id="tipo_pompa"]');
                         const scopInput = trEl.querySelector(`[data-column-id="${col.id}"]`);
+                        const gwpEl = trEl.querySelector('[data-column-id="gwp"]');
+                        const gwpVal = gwpEl ? (gwpEl.value || '') : null;
                         if (!scopInput) return;
                         const tipoVal = String(tipoEl ? (tipoEl.value || '') : '').trim();
-                        // find mapping with canonicalization
+
+                        // Use the ecodesign helper (defined in data.js) to obtain the correct minimum
                         let mapped = null;
-                        const tcanon = canonicalKey(tipoVal);
-                        for (const k of Object.keys(PUMP_SCOP_MIN)) {
-                            if (!k) continue;
-                            const kcanon = canonicalKey(k);
-                            if (tcanon === kcanon || tcanon.indexOf(kcanon) !== -1 || kcanon.indexOf(tcanon) !== -1) {
-                                mapped = PUMP_SCOP_MIN[k];
-                                break;
+                        try {
+                            const spec = typeof getPumpEcodesignSpec === 'function' ? getPumpEcodesignSpec(tipoVal, gwpVal) : null;
+                            if (spec) {
+                                mapped = spec.scop || spec.cop || null;
                             }
+                        } catch (e) {
+                            console.warn('getPumpEcodesignSpec not available', e);
                         }
 
                         if (mapped !== null && mapped !== undefined) {
-                            // set min attribute so global validation picks it up
                             scopInput.setAttribute('min', String(mapped));
                         } else {
                             scopInput.removeAttribute('min');
                         }
-                        // Allow flexible decimal places for SCOP (integers or 1-3 decimals).
-                        // Use step='any' to avoid HTML5 step mismatch errors; enforce max 3 decimals in JS.
+
                         try { scopInput.setAttribute('step', 'any'); } catch (e) {}
 
                         // immediate per-field check and inline message
                         const raw = String(scopInput.value || '').replace(',', '.').trim();
                         const num = raw === '' ? NaN : parseFloat(raw);
-                        // enforce at most 3 decimal places (but allow 0,1,2 or 3)
                         const decPart = (raw.indexOf('.') >= 0) ? raw.split('.') [1] : '';
                         if (decPart && decPart.length > 3) {
                             scopInput.classList.add('invalid');
@@ -298,17 +312,100 @@ async function initCalculator() {
                 // Attach listeners: when SCOP changes, or tipo_pompa changes in same row
                 cellInput.addEventListener('input', () => applyScopMinConstraint());
                 // Also observe changes to tipo_pompa select in this row
-                // Use a small timeout to allow the select to be created if invoked concurrently
-                setTimeout(() => {
+                // Execute synchronously to avoid race conditions where validation
+                // runs before the per-row fields are toggled.
+                function initTipoGwpCopToggle() {
                     const trEl = td.parentNode;
                     if (!trEl) return;
                     const tipoEl = trEl.querySelector('[data-column-id="tipo_pompa"]');
-                    if (tipoEl) {
-                        tipoEl.addEventListener('change', () => applyScopMinConstraint());
+                    const gwpEl = trEl.querySelector('[data-column-id="gwp"]');
+                    const copEl = trEl.querySelector('[data-column-id="cop"]');
+                    const scopEl = trEl.querySelector('[data-column-id="scop"]');
+
+                    // If some dependent cells are not yet present (created later in the loop),
+                    // retry shortly. This ensures toggling finds the elements and applies
+                    // the disabled/invalid cleanup correctly.
+                    if (!tipoEl || !gwpEl || !copEl || !scopEl) {
+                        setTimeout(initTipoGwpCopToggle, 10);
+                        return;
                     }
-                    // Run initial constraint application
+
+                    function toggleFieldsByTipo() {
+                        const tipoVal = tipoEl ? String(tipoEl.value || '') : '';
+                        const lower = tipoVal.toLowerCase();
+                        // show gwp for types that depend on refrigerant band
+                        const needsGwp = lower.includes('split') || lower.includes('multisplit') || (lower.includes('salamoia') && lower.includes('aria')) || (lower.includes('fixed') && lower.includes('double'));
+                        if (gwpEl) {
+                            if (needsGwp) {
+                                gwpEl.disabled = false;
+                                gwpEl.removeAttribute('aria-hidden');
+                                gwpEl.required = true;
+                                gwpEl.classList.remove('disabled-input');
+                            } else {
+                                gwpEl.disabled = true;
+                                gwpEl.setAttribute('aria-hidden', 'true');
+                                gwpEl.required = false;
+                                gwpEl.classList.add('disabled-input');
+                                // clear any inline errors if disabling
+                                gwpEl.classList.remove('invalid');
+                                try { gwpEl.setCustomValidity(''); } catch (e) {}
+                            }
+                        }
+
+                        // show cop only for fixed double duct
+                        const needsCop = lower.includes('fixed') && lower.includes('double');
+                        if (copEl) {
+                            if (needsCop) {
+                                copEl.disabled = false;
+                                copEl.removeAttribute('aria-hidden');
+                                copEl.required = true;
+                                copEl.classList.remove('disabled-input');
+                            } else {
+                                copEl.disabled = true;
+                                copEl.setAttribute('aria-hidden', 'true');
+                                copEl.required = false;
+                                copEl.classList.add('disabled-input');
+                                // clear any inline invalid styling when disabling
+                                copEl.classList.remove('invalid');
+                                try { copEl.setCustomValidity(''); } catch (e) {}
+                            }
+                        }
+
+                        // SCOP: disable for fixed double duct (COP used instead), require for others
+                        if (scopEl) {
+                            if (needsCop) {
+                                scopEl.disabled = true;
+                                scopEl.setAttribute('aria-hidden', 'true');
+                                scopEl.required = false;
+                                scopEl.classList.add('disabled-input');
+                                try { scopEl.setCustomValidity(''); } catch (e) {}
+                                scopEl.classList.remove('invalid');
+                            } else {
+                                scopEl.disabled = false;
+                                scopEl.removeAttribute('aria-hidden');
+                                scopEl.required = true;
+                                scopEl.classList.remove('disabled-input');
+                            }
+                        }
+
+                        // After toggling fields, re-run scop constraint to pick correct minima if gwp changed
+                        applyScopMinConstraint();
+                    }
+
+                    if (tipoEl) {
+                        tipoEl.addEventListener('change', toggleFieldsByTipo);
+                    }
+                    if (gwpEl) {
+                        gwpEl.addEventListener('change', applyScopMinConstraint);
+                    }
+
+                    // Run initial constraint application synchronously
                     applyScopMinConstraint();
-                }, 10);
+                    toggleFieldsByTipo();
+                }
+
+                // Start the initializer (it will retry shortly if cells are not yet created)
+                initTipoGwpCopToggle();
             }
             // Se la colonna è potenza nominale, aggiungi un placeholder per messaggi di errore inline
             if (col.id === 'potenza_nominale') {
@@ -359,6 +456,69 @@ async function initCalculator() {
         tr.appendChild(tdActions);
         
         tbody.appendChild(tr);
+
+        // Ensure initial per-row state for pompe di calore fields so newly added
+        // rows don't appear invalid before the toggle runs.
+        try {
+            const tipoElInit = tr.querySelector('[data-column-id="tipo_pompa"]');
+            const copElInit = tr.querySelector('[data-column-id="cop"]');
+            const scopElInit = tr.querySelector('[data-column-id="scop"]');
+            const gwpElInit = tr.querySelector('[data-column-id="gwp"]');
+            const tipoValInit = tipoElInit ? String(tipoElInit.value || '').toLowerCase() : '';
+            const needsCopInit = tipoValInit.includes('fixed') && tipoValInit.includes('double');
+            const needsGwpInit = tipoValInit.includes('split') || tipoValInit.includes('multisplit') || (tipoValInit.includes('salamoia') && tipoValInit.includes('aria')) || (tipoValInit.includes('fixed') && tipoValInit.includes('double'));
+
+            if (copElInit) {
+                if (!needsCopInit) {
+                    copElInit.disabled = true;
+                    copElInit.setAttribute('aria-hidden', 'true');
+                    copElInit.required = false;
+                    copElInit.classList.add('disabled-input');
+                    copElInit.classList.remove('invalid');
+                    try { copElInit.setCustomValidity(''); } catch (e) {}
+                    try { copElInit.value = ''; } catch (e) {}
+                } else {
+                    copElInit.disabled = false;
+                    copElInit.removeAttribute('aria-hidden');
+                    copElInit.required = true;
+                    copElInit.classList.remove('disabled-input');
+                }
+            }
+
+            if (scopElInit) {
+                if (needsCopInit) {
+                    scopElInit.disabled = true;
+                    scopElInit.setAttribute('aria-hidden', 'true');
+                    scopElInit.required = false;
+                    scopElInit.classList.add('disabled-input');
+                    scopElInit.classList.remove('invalid');
+                    try { scopElInit.setCustomValidity(''); } catch (e) {}
+                    try { scopElInit.value = ''; } catch (e) {}
+                } else {
+                    scopElInit.disabled = false;
+                    scopElInit.removeAttribute('aria-hidden');
+                    scopElInit.required = true;
+                    scopElInit.classList.remove('disabled-input');
+                }
+            }
+
+            if (gwpElInit) {
+                if (!needsGwpInit) {
+                    gwpElInit.disabled = true;
+                    gwpElInit.setAttribute('aria-hidden', 'true');
+                    gwpElInit.required = false;
+                    gwpElInit.classList.add('disabled-input');
+                    gwpElInit.classList.remove('invalid');
+                    try { gwpElInit.setCustomValidity(''); } catch (e) {}
+                    try { gwpElInit.value = ''; } catch (e) {}
+                } else {
+                    gwpElInit.disabled = false;
+                    gwpElInit.removeAttribute('aria-hidden');
+                    gwpElInit.required = true;
+                    gwpElInit.classList.remove('disabled-input');
+                }
+            }
+        } catch (e) { /* ignore init errors */ }
 
         // Applica validazione specifica per righe pompe di calore (se applicabile)
         attachPompaRowValidation(interventionId, inputId, rowIndex, tr);
@@ -717,14 +877,31 @@ async function initCalculator() {
                     } else {
                         rows.forEach((row, rIdx) => {
                             // Per ogni colonna della tabella
-                            (input.columns || []).forEach(col => {
-                                // I campi computed o opzionali non sono obbligatori
-                                if (col.type === 'computed' || col.optional) return;
-
-                                // Preferisci il valore mostrato nel DOM (se presente) — così cancellazioni sono rilevate immediatamente
+                                (input.columns || []).forEach(col => {
+                                // I campi computed non sono obbligatori
+                                if (col.type === 'computed') return;
+                                // For certain optional columns (gwp/cop) treat them as required only
+                                // if their DOM cell is both visible and enabled. Also, if a cell
+                                // exists but is disabled by UI logic, skip validating it entirely.
+                                let treatOptional = col.optional === true;
                                 const tbody = document.getElementById(`tbody-${intId}-${input.id}`);
                                 const tr = tbody ? tbody.querySelector(`tr[data-row-index="${rIdx}"]`) : null;
                                 const cellEl = tr ? tr.querySelector(`[data-column-id="${col.id}"]`) : null;
+
+                                // If the cell exists and is disabled, skip validation for this column
+                                if (cellEl && cellEl.disabled) {
+                                    return; // continue to next column
+                                }
+
+                                if (treatOptional && (col.id === 'gwp' || col.id === 'cop')) {
+                                    // If the cell exists and is visible and enabled, then it's required
+                                    if (cellEl && cellEl.offsetParent !== null && !cellEl.disabled) {
+                                        treatOptional = false;
+                                    }
+                                }
+                                if (treatOptional) return;
+
+                                // Prefer the value shown in the DOM (so deletions are detected immediately)
                                 let val;
                                 if (cellEl) {
                                     let domVal = cellEl.value;
@@ -737,7 +914,7 @@ async function initCalculator() {
                                         val = String(domVal).trim();
                                     }
                                 } else {
-                                    // Fallback: usa il valore nello stato
+                                    // Fallback: use the value in state
                                     val = row ? row[col.id] : undefined;
                                 }
 
@@ -1943,6 +2120,81 @@ async function initCalculator() {
 
             // Attach listeners
             tipoSel.addEventListener('change', () => applyConstraintAndValidate());
+
+            // Ensure per-row toggle for cop/scop/gwp is attached here (centralized)
+            try {
+                if (!tipoSel.dataset.toggleAttached) {
+                    const copEl = tr.querySelector('input[data-column-id="cop"]');
+                    const scopEl = tr.querySelector('input[data-column-id="scop"]');
+                    const gwpEl = tr.querySelector('select[data-column-id="gwp"]');
+
+                    function toggleFieldsByTipoRow() {
+                        const tipoVal = (tipoSel.value || '').toString().toLowerCase();
+                        const needsCop = tipoVal.includes('fixed') && tipoVal.includes('double');
+                        const needsGwp = tipoVal.includes('split') || tipoVal.includes('multisplit') || (tipoVal.includes('salamoia') && tipoVal.includes('aria')) || (tipoVal.includes('fixed') && tipoVal.includes('double'));
+
+                        if (copEl) {
+                            if (needsCop) {
+                                copEl.disabled = false;
+                                copEl.removeAttribute('aria-hidden');
+                                copEl.required = true;
+                                copEl.classList.remove('disabled-input');
+                            } else {
+                                copEl.disabled = true;
+                                copEl.setAttribute('aria-hidden', 'true');
+                                copEl.required = false;
+                                copEl.classList.add('disabled-input');
+                                copEl.classList.remove('invalid');
+                                try { copEl.setCustomValidity(''); } catch (e) {}
+                                try { copEl.value = ''; } catch (e) {}
+                            }
+                        }
+
+                        if (scopEl) {
+                            if (needsCop) {
+                                scopEl.disabled = true;
+                                scopEl.setAttribute('aria-hidden', 'true');
+                                scopEl.required = false;
+                                scopEl.classList.add('disabled-input');
+                                scopEl.classList.remove('invalid');
+                                try { scopEl.setCustomValidity(''); } catch (e) {}
+                                try { scopEl.value = ''; } catch (e) {}
+                            } else {
+                                scopEl.disabled = false;
+                                scopEl.removeAttribute('aria-hidden');
+                                scopEl.required = true;
+                                scopEl.classList.remove('disabled-input');
+                            }
+                        }
+
+                        if (gwpEl) {
+                            if (needsGwp) {
+                                gwpEl.disabled = false;
+                                gwpEl.removeAttribute('aria-hidden');
+                                gwpEl.required = true;
+                                gwpEl.classList.remove('disabled-input');
+                            } else {
+                                gwpEl.disabled = true;
+                                gwpEl.setAttribute('aria-hidden', 'true');
+                                gwpEl.required = false;
+                                gwpEl.classList.add('disabled-input');
+                                gwpEl.classList.remove('invalid');
+                                try { gwpEl.setCustomValidity(''); } catch (e) {}
+                                try { gwpEl.value = ''; } catch (e) {}
+                            }
+                        }
+
+                        // re-run scop minima update
+                        applyScopMinConstraint();
+                        validateRequiredFields();
+                    }
+
+                    tipoSel.addEventListener('change', toggleFieldsByTipoRow);
+                    // initial run
+                    toggleFieldsByTipoRow();
+                    tipoSel.dataset.toggleAttached = '1';
+                }
+            } catch (e) { /* ignore */ }
             potEl.addEventListener('input', () => applyConstraintAndValidate());
 
             // Applica subito la regola alla riga appena creata
@@ -2057,6 +2309,66 @@ async function initCalculator() {
             if (!pompeValidation.valid) {
                 const lines = pompeValidation.errors.map(e => `Riga ${e.row}: ${e.msg} (tipo: ${e.tipo}, potenza: ${isNaN(e.pot) ? 'vuoto' : e.pot + ' kW'})`);
                 alert('Errore nei limiti di potenza per Pompe di Calore:\n' + lines.join('\n'));
+                return;
+            }
+        }
+
+        // Additional strict validation for pompe-calore: ensure SCOP is provided
+        // when required (i.e., not disabled) and respects the ecodesign minima.
+        if (state.selectedInterventions.includes('pompa-calore')) {
+            const scErrors = [];
+            const intId = 'pompa-calore';
+            const inputId = 'righe_pompe';
+            const tbody = document.getElementById(`tbody-${intId}-${inputId}`);
+            const rows = Array.isArray(state.inputValues[intId]?.[inputId]) ? state.inputValues[intId][inputId] : [];
+            // iterate DOM rows if present to respect per-row disabled state
+            const trEls = tbody ? Array.from(tbody.querySelectorAll('tr')) : [];
+            rows.forEach((row, idx) => {
+                const tr = trEls[idx] || null;
+                const scopEl = tr ? tr.querySelector('[data-column-id="scop"]') : null;
+                const copEl = tr ? tr.querySelector('[data-column-id="cop"]') : null;
+                const tipo = String((row && row.tipo_pompa) || (tr && (tr.querySelector('[data-column-id="tipo_pompa"]')?.value)) || '').trim();
+
+                // If scop field exists in DOM and is disabled, skip
+                if (scopEl && scopEl.disabled) return;
+
+                // Determine the user-supplied value (prefer DOM if present)
+                let scopVal = null;
+                if (scopEl) {
+                    const raw = String(scopEl.value || '').trim();
+                    scopVal = raw === '' ? null : Number(raw.replace(',', '.'));
+                } else if (row && typeof row.scop !== 'undefined' && row.scop !== null && row.scop !== '') {
+                    const raw = row.scop;
+                    scopVal = (raw === '' ? null : Number(raw));
+                }
+
+                // If scop is empty but cop exists and is used for this type, allow
+                const lower = tipo.toLowerCase();
+                const needsCop = lower.includes('fixed') && lower.includes('double');
+                if (needsCop) return; // scop not required
+
+                if (scopVal === null || isNaN(scopVal)) {
+                    scErrors.push(`Riga ${idx + 1}: SCOP non fornito`);
+                    return;
+                }
+
+                // Check against ecodesign minima if available
+                try {
+                    const gwpVal = row?.gwp || (tr ? (tr.querySelector('[data-column-id="gwp"]')?.value || null) : null);
+                    const spec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipo, gwpVal) : null;
+                    const minScop = spec && spec.scop ? spec.scop : null;
+                    if (minScop !== null && typeof minScop !== 'undefined') {
+                        if (scopVal < Number(minScop)) {
+                            scErrors.push(`Riga ${idx + 1}: SCOP fornito (${scopVal}) inferiore al minimo normativo (${minScop})`);
+                        }
+                    }
+                } catch (e) {
+                    // ignore helper errors
+                }
+            });
+
+            if (scErrors.length > 0) {
+                alert('Errore nei campi SCOP:\n' + scErrors.join('\n'));
                 return;
             }
         }
