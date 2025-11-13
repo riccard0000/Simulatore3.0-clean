@@ -25,6 +25,43 @@ const PUMP_ECODESIGN_SPECS = {
     'salamoia/acqua': { scop: 3.325 }
 };
 
+// Efficienza stagionale minima (ηs_min) per tipologia di pompa quando prevista
+// I valori sono espressi nella scala assoluta usata in tabella (es. 137, 149, 125, 110 etc.)
+const PUMP_EFFICIENCY_MIN = {
+    'aria/aria split/multisplit': {
+        gwp: { '>150': { eta_s_min: 149 }, '<=150': { eta_s_min: 134 } }
+    },
+    'aria/aria fixed double duct': {
+        // fixed double duct non usa efficienza stagionale minima in questa scala
+    },
+    'aria/aria vrf/vrv': { eta_s_min: 137 },
+    'aria/aria rooftop': { eta_s_min: 125 },
+    'acqua/aria': { eta_s_min: 137 },
+    'aria/acqua': { eta_s_min: 110 },
+    'acqua/acqua': { eta_s_min: 110 },
+    'salamoia/aria': { gwp: { '>150': { eta_s_min: 149 }, '<=150': { eta_s_min: 134 }, default: { eta_s_min: 137 } } },
+    'salamoia/acqua': { eta_s_min: 125 }
+};
+
+function getPumpEfficiencyMin(tipo, gwp) {
+    const tcanon = String(tipo || '').toLowerCase();
+    for (const key of Object.keys(PUMP_EFFICIENCY_MIN)) {
+        const kcanon = key.toLowerCase();
+        if (tcanon === kcanon || tcanon.indexOf(kcanon) !== -1 || kcanon.indexOf(tcanon) !== -1) {
+            const spec = PUMP_EFFICIENCY_MIN[key];
+            if (!spec) return null;
+            if (spec.gwp) {
+                const gw = (gwp || '').toString().trim();
+                if (gw === '>150' || gw === 'GWP>150' || gw === 'GWP > 150') return spec.gwp['>150'];
+                if (gw === '<=150' || gw === 'GWP<=150' || gw === 'GWP <= 150') return spec.gwp['<=150'];
+                if (spec.gwp.default) return spec.gwp.default;
+            }
+            return spec;
+        }
+    }
+    return null;
+}
+
 function getPumpEcodesignSpec(tipo, gwp) {
     const tcanon = String(tipo || '').toLowerCase();
     // find best matching key
@@ -1854,6 +1891,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         { id: 'potenza_nominale', name: 'Potenza termica nominale Prated (kW)', type: 'number', min: 0, step: 0.1 },
                         { id: 'scop', name: 'SCOP stagionale', type: 'number', min: 2.5, step: 0.01, optional: true },
                         { id: 'cop', name: 'COP (solo per fixed double duct)', type: 'number', min: 0, step: 0.01, optional: true },
+                        { id: 'eff_stagionale', name: 'Efficienza stagionale (ηs) - valore assoluto', type: 'number', min: 110, max: 149, step: 1, help: 'Valore assoluto (es. 137). Sempre visibile; non editabile per fixed double duct.' },
                         { id: 'gwp', name: 'Fascia GWP refrigerante', type: 'select', options: ['>150', '<=150'], optional: true, help: 'Seleziona la fascia GWP del refrigerante per le tipologie che la richiedono' }
                     ],
                     help: 'Aggiungi una riga per ogni pompa presente nell\'impianto. I parametri di ciascuna riga verranno valutati separatamente e sommati. La zona climatica è specificata una sola volta per l\'intervento.'
@@ -1892,12 +1930,15 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     const potenza_nominale = Number(row?.potenza_nominale) || 0;
                     const scop = row?.scop !== undefined && row?.scop !== null ? Number(row.scop) : null;
                     const cop = row?.cop !== undefined && row?.cop !== null ? Number(row.cop) : null; // for fixed double duct
+                    const eff_stagionale = row?.eff_stagionale !== undefined && row?.eff_stagionale !== null ? Number(row.eff_stagionale) : null; // absolute scale 110..149
                     const gwp = row?.gwp || null; // optional: '>150' or '<=150'
                     const zona_climatica = topZona || row?.zona_climatica;
                     if (!potenza_nominale || (!scop && !cop) || !zona_climatica) return;
 
                     // find normative spec for this pump type and gwp band
                     const spec = getPumpEcodesignSpec(tipo_pompa, gwp) || {};
+                    // find seasonal efficiency minimum spec (eta_s_min) when available
+                    const effSpec = getPumpEfficiencyMin(tipo_pompa, gwp) || {};
                     // determine which metric to use (scop or cop)
                     let userValue = null;
                     let minValue = null;
@@ -1921,15 +1962,37 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     // If user didn't provide required metric, skip row
                     if (userValue === null || userValue === undefined) return;
 
-                    // Check compliance vs ecodesign minima
+                    // Check compliance vs ecodesign minima (for SCOP/COP)
                     let notCompliant = false;
                     if (minValue !== undefined && minValue !== null) {
                         if (userValue < minValue) notCompliant = true;
                     }
 
+                    // seasonal efficiency minima (eta_s_min) when applicable
+                    let seasonalMin = null;
+                    if (effSpec && typeof effSpec.eta_s_min !== 'undefined') seasonalMin = Number(effSpec.eta_s_min);
+                    // If seasonal eff provided and seasonalMin exists, mark non-compliant accordingly
+                    if (seasonalMin !== null && eff_stagionale !== null) {
+                        if (eff_stagionale < seasonalMin) notCompliant = true;
+                    }
+
                     const quf = qufTable[zona_climatica] || 0;
                     const qu = potenza_nominale * quf;
-                    const kp = (minValue && minValue > 0) ? (userValue / minValue) : 1;
+                    // Compute kp according to rules:
+                    // - fixed double duct: kp = COP / COP_min (existing behavior)
+                    // - other types: kp = eff_stagionale_user / seasonalMin (when available)
+                    let kp = 1;
+                    if (spec.cop && minValue) {
+                        // fixed double duct keeps COP based kp
+                        kp = (minValue && minValue > 0) ? (userValue / minValue) : 1;
+                    } else {
+                        if (seasonalMin !== null && eff_stagionale !== null && seasonalMin > 0) {
+                            kp = eff_stagionale / seasonalMin;
+                        } else {
+                            // fallback: preserve previous behavior based on scop/minValue
+                            kp = (minValue && minValue > 0) ? (userValue / minValue) : 1;
+                        }
+                    }
                     const ei = qu * (1 - 1/(scop||userValue)) * kp; // use scop for the 1-1/SCOP factor when available, else best-effort with userValue
                     const ci = assignCi(tipo_pompa, potenza_nominale);
                     const incentivo_annuo = ci !== null ? ci * ei : 0;
@@ -1977,6 +2040,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                     // retrieve normative spec
                     const spec = getPumpEcodesignSpec(tipo_pompa, gwp) || {};
+                    const effSpec = getPumpEfficiencyMin(tipo_pompa, gwp) || {};
                     let metric = spec.cop ? 'COP' : 'SCOP';
                     let userValue = metric === 'COP' ? cop : scop;
                     let minValue = metric === 'COP' ? spec.cop : spec.scop;
@@ -1984,7 +2048,21 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                     const Quf = qufTable[zona] || 0;
                     const Qu = Pr * Quf;
-                    const kp = (minValue > 0) ? (userValue / minValue) : 1;
+
+                    const eff_stagionale = row?.eff_stagionale !== undefined && row?.eff_stagionale !== null ? Number(row.eff_stagionale) : null;
+                    let seasonalMin = null;
+                    if (effSpec && typeof effSpec.eta_s_min !== 'undefined') seasonalMin = Number(effSpec.eta_s_min);
+
+                    // compute kp according to rule: fixed double duct uses COP/COP_min; otherwise use efficiency stagionale ratio when available
+                    let kp = 1;
+                    if (spec.cop && minValue) {
+                        kp = (minValue > 0) ? (userValue / minValue) : 1;
+                    } else if (seasonalMin !== null && eff_stagionale !== null && seasonalMin > 0) {
+                        kp = eff_stagionale / seasonalMin;
+                    } else {
+                        kp = (minValue > 0) ? (userValue / minValue) : 1;
+                    }
+
                     const oneMinusInvScop = 1 - 1/(scop||userValue);
                     const EI = Qu * oneMinusInvScop * kp;
 
@@ -2011,11 +2089,22 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     total += totale;
 
                     // compliance check
-                    const notCompliant = userValue < minValue;
+                    const notCompliantMetric = userValue < minValue;
+                    const notCompliantSeasonal = (seasonalMin !== null && eff_stagionale !== null && eff_stagionale < seasonalMin);
+                    const notCompliant = notCompliantMetric || notCompliantSeasonal;
 
                     steps.push(`Riga ${idx+1} (${tipo_pompa} - Pr=${Pr} kW, zona ${zona}):`);
-                    steps.push(`• ${metric} inserito = ${userValue}; minimo Ecodesign (${metric}) = ${minValue}` + (notCompliant ? ' → ATTENZIONE: NON conforme al requisito Ecodesign' : ''));
-                    steps.push(`• kp = ${metric} / ${metric}_min = ${calculatorData.formatNumber(userValue,3)} / ${calculatorData.formatNumber(minValue,3)} = ${calculatorData.formatNumber(kp,3)}`);
+                    steps.push(`• ${metric} inserito = ${userValue}; minimo Ecodesign (${metric}) = ${minValue}` + (notCompliantMetric ? ' → ATTENZIONE: NON conforme al requisito Ecodesign' : ''));
+                    if (seasonalMin !== null) {
+                        steps.push(`• Efficienza stagionale inserita = ${eff_stagionale === null ? 'N/D' : calculatorData.formatNumber(eff_stagionale,0)}; minimo Ecodesign (ηs_min) = ${calculatorData.formatNumber(seasonalMin,0)}` + (notCompliantSeasonal ? ' → ATTENZIONE: valore inferiore al minimo richiesto' : ''));
+                    }
+                    if (spec.cop && minValue) {
+                        steps.push(`• kp = COP / COP_min = ${calculatorData.formatNumber(userValue,3)} / ${calculatorData.formatNumber(minValue,3)} = ${calculatorData.formatNumber(kp,3)}`);
+                    } else if (seasonalMin !== null && eff_stagionale !== null) {
+                        steps.push(`• kp = ηs / ηs_min = ${calculatorData.formatNumber(eff_stagionale,0)} / ${calculatorData.formatNumber(seasonalMin,0)} = ${calculatorData.formatNumber(kp,3)}`);
+                    } else {
+                        steps.push(`• kp (fallback) = ${metric} / ${metric}_min = ${calculatorData.formatNumber(userValue,3)} / ${calculatorData.formatNumber(minValue,3)} = ${calculatorData.formatNumber(kp,3)}`);
+                    }
                     steps.push(`• Quf (ore/anno per zona ${zona}) = ${calculatorData.formatNumber(Quf,0)}`);
                     steps.push(`• Qu = Pr × Quf = ${calculatorData.formatNumber(Pr,2)} kW × ${calculatorData.formatNumber(Quf,0)} h = ${calculatorData.formatNumber(Qu,2)} kWh/anno`);
                     steps.push(`• Fattore = (1 - 1/SCOP) = 1 - 1/${calculatorData.formatNumber((scop||userValue),3)} = ${calculatorData.formatNumber(oneMinusInvScop,6)}`);
