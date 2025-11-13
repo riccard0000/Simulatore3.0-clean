@@ -1876,8 +1876,8 @@ async function initCalculator() {
                     // to allow free editing and only show a non-blocking visual
                     // warning. Store the computed max in dataset for reference.
                     costoTot.dataset.max = String(Math.max(0, Math.round(maxCost)));
-                    costoTot.title = `Spesa massima ammissibile: ${Math.round(maxCost).toLocaleString('it-IT')} € (Regole Applicative)`;
-                    costoTot.placeholder = `Max: ${Math.round(maxCost).toLocaleString('it-IT')} €`;
+                    costoTot.title = `Spesa massima ammissibile: ${calculatorData.formatNumber(Math.round(maxCost),0)} € (Regole Applicative)`;
+                    costoTot.placeholder = `Max: ${calculatorData.formatNumber(Math.round(maxCost),0)} €`;
                     
                     // Validazione live
                     costoTot.addEventListener('input', function() {
@@ -1903,11 +1903,11 @@ async function initCalculator() {
                         if (currentMaxCost && val > currentMaxCost) {
                             // Do not add a visual CSS warning (no yellow border).
                             // Keep a descriptive title so users can see the informative message on hover.
-                            this.title = `La spesa supera il massimale indicativo: ${Math.round(currentMaxCost).toLocaleString('it-IT')} €`;
+                            this.title = `La spesa supera il massimale indicativo: ${calculatorData.formatNumber(Math.round(currentMaxCost),0)} €`;
                         } else {
                             // restore the default informative title (use dataset value if present)
                             const ds = this.dataset.max ? Number(this.dataset.max) : Math.round(currentMaxCost || 0);
-                            this.title = `Spesa massima ammissibile: ${ds.toLocaleString('it-IT')} €`;
+                            this.title = `Spesa massima ammissibile: ${calculatorData.formatNumber(ds,0)} €`;
                         }
                     });
                     // Aggiorna lo stato anche su input (in tempo reale, incluse cancellazioni)

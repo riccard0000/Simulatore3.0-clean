@@ -47,6 +47,24 @@ function getPumpEcodesignSpec(tipo, gwp) {
 }
 
 const calculatorData = { // Updated: 2025-11-04 15:45:25
+    // Utility: format numbers using point as thousands separator and comma as decimal separator
+    // Usage: calculatorData.formatNumber(value, digits)
+    formatNumber: function(value, digits) {
+        if (value === null || value === undefined || value === '') return '';
+        const n = Number(value);
+        if (isNaN(n)) return String(value);
+        // If digits specified, treat it as the maximum number of decimal digits to show.
+        // Omit decimal part entirely when the rounded value has no fractional part.
+        if (typeof digits === 'number') {
+            const rounded = Number(n.toFixed(digits));
+            const hasFraction = Math.abs(rounded - Math.trunc(rounded)) > 0;
+            return rounded.toLocaleString('it-IT', { minimumFractionDigits: hasFraction ? 1 : 0, maximumFractionDigits: digits });
+        }
+        // No digits requested: show up to 2 decimals but omit trailing zeros
+        const rounded = Number(n.toFixed(2));
+        const hasFraction = Math.abs(rounded - Math.trunc(rounded)) > 0;
+        return rounded.toLocaleString('it-IT', { minimumFractionDigits: hasFraction ? 1 : 0, maximumFractionDigits: 2 });
+    },
     // STEP 1: Soggetti Ammessi (chi ha disponibilità dell'immobile)
     subjectTypes: [
         {
@@ -424,7 +442,40 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 'private_tertiary_large': 0.45
             };
 
-            p = mapCat2[operatorType] !== undefined ? mapCat2[operatorType] : 0.65;
+            // Determine company size robustly. Prefer explicit operatorType mapping,
+            // but also inspect contextData.subjectSpecificData flags (conferma_piccola_impresa,
+            // conferma_media_impresa) in case the operatorType value differs from expected.
+            const opKey = String(operatorType || '').trim();
+            const lowerOp = opKey.toLowerCase();
+
+            // Helper to detect confirm flags in contextData
+            const ss = contextData && contextData.subjectSpecificData ? contextData.subjectSpecificData : {};
+            const confirmedSmall = !!(ss.conferma_piccola_impresa);
+            const confirmedMedium = !!(ss.conferma_media_impresa);
+            const confirmedLarge = !!(ss.conferma_grande_impresa);
+
+            // Also inspect subjectType string (some callers pass different enums)
+            const subjectTypeStr = (contextData && contextData.subjectType) ? String(contextData.subjectType).toLowerCase() : '';
+
+            // Primary detection based on operatorType, confirmation flags or subjectType
+            if (lowerOp.includes('medium') || confirmedMedium || subjectTypeStr.includes('medium') || subjectTypeStr.includes('media')) {
+                p = 0.55;
+            } else if (lowerOp.includes('large') || lowerOp.includes('grande') || confirmedLarge || subjectTypeStr.includes('large') || subjectTypeStr.includes('grande')) {
+                // large enterprises → 45% per user request
+                p = 0.45;
+            } else if (lowerOp.includes('small') || lowerOp.includes('piccola') || confirmedSmall || subjectTypeStr.includes('small') || subjectTypeStr.includes('piccola')) {
+                p = 0.65;
+            } else {
+                // fallback: try a case-insensitive lookup in the provided map
+                let fallback = 0.65;
+                for (const k of Object.keys(mapCat2)) {
+                    if (String(k).toLowerCase() === lowerOp) {
+                        fallback = mapCat2[k];
+                        break;
+                    }
+                }
+                p = fallback;
+            }
             pDesc = `${Math.round(p*100)}% (regola Titolo III - Categoria 2)`;
 
             // If premio UE applies, we do NOT automatically increase the cap
@@ -909,7 +960,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                 steps.push(`Zona climatica: ${zona_climatica}`);
                 steps.push(`Percentuale incentivazione: ${percentualeDesc}`);
-                steps.push(ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${percentuale.toFixed(2)})` : `  Premio Prodotti UE: non applicato`);
+                steps.push(ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${calculatorData.formatNumber(percentuale,2)})` : `  Premio Prodotti UE: non applicato`);
                 steps.push(`---`);
 
                 righe_opache.forEach((riga, index) => {
@@ -936,14 +987,14 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     incentivoTotale += incentivoRiga;
                     
                     steps.push(`Riga ${index + 1}: ${tipologiaLabel}`);
-                    steps.push(`  Superficie: ${superficie.toFixed(2)} m²`);
-                    steps.push(`  Costo totale: ${costo_totale.toLocaleString('it-IT')} €`);
-                    steps.push(`  C = ${costo_totale.toLocaleString('it-IT')} / ${superficie.toFixed(2)} = ${costo_specifico.toFixed(2)} €/m²`);
+                    steps.push(`  Superficie: ${calculatorData.formatNumber(superficie,2)} m²`);
+                    steps.push(`  Costo totale: ${calculatorData.formatNumber(costo_totale,2)} €`);
+                    steps.push(`  C = ${calculatorData.formatNumber(costo_totale,2)} / ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(costo_specifico,2)} €/m²`);
                     steps.push(superaMassimale 
-                        ? `  ⚠️  C supera Cmax! Uso Cmax=${cmax} €/m²` 
-                        : `  ✓ C (${costo_specifico.toFixed(2)}) ≤ Cmax (${cmax})`
+                        ? `  ⚠️  C supera Cmax! Uso Cmax=${calculatorData.formatNumber(cmax,2)} €/m²` 
+                        : `  ✓ C (${calculatorData.formatNumber(costo_specifico,2)}) ≤ Cmax (${calculatorData.formatNumber(cmax,2)})`
                     );
-                    steps.push(`  Incentivo riga = ${percentuale.toFixed(2)} × ${costoEffettivo.toFixed(2)} × ${superficie.toFixed(2)} = ${incentivoRiga.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
+                    steps.push(`  Incentivo riga = ${calculatorData.formatNumber(percentuale,2)} × ${calculatorData.formatNumber(costoEffettivo,2)} × ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(incentivoRiga,2)} €`);
                    
                     steps.push(`---`);
                 });
@@ -951,8 +1002,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const imas = 1000000;
                 const finale = Math.min(incentivoTotale, imas);
                 
-                steps.push(`Totale = ${incentivoTotale.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
-                steps.push(`Finale = min(${incentivoTotale.toLocaleString('it-IT', {minimumFractionDigits: 2})}, ${imas.toLocaleString('it-IT')}) = ${finale.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
+                steps.push(`Totale = ${calculatorData.formatNumber(incentivoTotale,2)} €`);
+                steps.push(`Finale = min(${calculatorData.formatNumber(incentivoTotale,2)}, ${calculatorData.formatNumber(imas,0)}) = ${calculatorData.formatNumber(finale,2)} €`);
                 
                 return {
                     result: finale,
@@ -1050,7 +1101,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 
                 return {
                     result: finale,
-                    formula: `Itot = p × min(C, ${cmaxInfissi}) × Sint; Imas=${imas.toLocaleString('it-IT')}€`,
+                    formula: `Itot = p × min(C, ${cmaxInfissi}) × Sint; Imas=${calculatorData.formatNumber(imas)}€`,
                     variables: { 
                         p: percentuale, 
                         pDesc: percentualeDesc,
@@ -1066,18 +1117,18 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         `Zona climatica: ${zona_climatica}`,
                         `Percentuale incentivazione: ${percentualeDesc}`,
                         `Cmax = ${cmaxInfissi} €/m²`,
-                        `C = ${(costo_specifico||0).toFixed(2)} €/m²`,
+                        `C = ${calculatorData.formatNumber(costo_specifico,2)} €/m²`,
                         superaCmax 
                             ? `⚠️  C supera Cmax! Uso Cmax=${cmaxInfissi} €/m²` 
-                            : `✓ C (${(costo_specifico||0).toFixed(2)}) ≤ Cmax (${cmaxInfissi})`,
-                        `Ceff = min(${(costo_specifico||0).toFixed(2)}, ${cmaxInfissi}) = ${costoEffettivo.toFixed(2)} €/m²`,
-                        `Base = ${percentuale.toFixed(2)} × ${costoEffettivo.toFixed(2)} × ${(superficie||0).toFixed(2)} = ${base.toFixed(2)} €`,
+                            : `✓ C (${calculatorData.formatNumber(costo_specifico,2)}) ≤ Cmax (${cmaxInfissi})`,
+                        `Ceff = min(${calculatorData.formatNumber(costo_specifico,2)}, ${cmaxInfissi}) = ${calculatorData.formatNumber(costoEffettivo,2)} €/m²`,
+                        `Base = ${calculatorData.formatNumber(percentuale,2)} × ${calculatorData.formatNumber(costoEffettivo,2)} × ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(base,2)} €`,
                         ueApplicata 
                             ? `Premio Prodotti UE: incluso nella percentuale di incentivazione (p=` 
                             : (ueRequested && percentuale >= 1.0)
                                 ? `UE: non applicata (già al 100%)`
                                 : `UE: non applicata`,
-                        `Finale = min(${base.toFixed(2)}, ${imas.toLocaleString('it-IT')}) = ${finale.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`
+                        `Finale = min(${calculatorData.formatNumber(base,2)}, ${calculatorData.formatNumber(imas)}) = ${calculatorData.formatNumber(finale,2)} €`
                     ]
                 };
             }
@@ -1213,15 +1264,15 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     incentivoTotale += incentivoRigaFinale;
 
                     steps.push(`Riga ${index + 1}: ${tipologiaLabel}`);
-                    steps.push(`  Superficie: ${superficie.toFixed(2)} m²`);
-                    steps.push(`  Costo totale: ${costo_totale.toLocaleString('it-IT')} €`);
-                    steps.push(`  C = ${costo_totale.toLocaleString('it-IT')} / ${superficie.toFixed(2)} = ${costo_specifico.toFixed(2)} €/m²`);
+                    steps.push(`  Superficie: ${calculatorData.formatNumber(superficie, 2)} m²`);
+                    steps.push(`  Costo totale: ${calculatorData.formatNumber(costo_totale)} €`);
+                    steps.push(`  C = ${calculatorData.formatNumber(costo_totale)} / ${calculatorData.formatNumber(superficie, 2)} = ${calculatorData.formatNumber(costo_specifico, 2)} €/m²`);
                     steps.push(superaMassimaleC 
-                        ? `  ⚠️  Costo specifico (${costo_specifico.toFixed(2)} €/m²) supera Cmax (${cmax} €/m²)! Uso Cmax.` 
-                        : `  ✓ Costo specifico (${costo_specifico.toFixed(2)}) ≤ Cmax (${cmax})`
+                        ? `  ⚠️  Costo specifico (${calculatorData.formatNumber(costo_specifico,2)} €/m²) supera Cmax (${cmax} €/m²)! Uso Cmax.` 
+                        : `  ✓ Costo specifico (${calculatorData.formatNumber(costo_specifico,2)}) ≤ Cmax (${cmax})`
                     );
-                    steps.push(`  Incentivo riga base = ${p.toFixed(2)} × ${costoEffettivo.toFixed(2)} × ${superficie.toFixed(2)} = ${incentivoRigaBase.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
-                    steps.push(`  Incentivo riga finale = min(${incentivoRigaBase.toLocaleString('it-IT', {minimumFractionDigits: 2})}, ${imax.toLocaleString('it-IT')}) = ${incentivoRigaFinale.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
+                    steps.push(`  Incentivo riga base = ${calculatorData.formatNumber(p,2)} × ${calculatorData.formatNumber(costoEffettivo,2)} × ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(incentivoRigaBase,2)} €`);
+                    steps.push(`  Incentivo riga finale = min(${calculatorData.formatNumber(incentivoRigaBase,2)}, ${calculatorData.formatNumber(imax)}) = ${calculatorData.formatNumber(incentivoRigaFinale,2)} €`);
                     steps.push(`---`);
                 });
 
@@ -1293,14 +1344,14 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const finale = Math.min(base, imax);
                 return {
                     result: finale,
-                    formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected?' (premio UE incluso nella percentuale)':''}; Imas=${imax.toLocaleString('it-IT')}€`,
+                    formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected?' (premio UE incluso nella percentuale)':''}; Imas=${calculatorData.formatNumber(imax)}€`,
                     variables: { p: percentuale, pDesc: percentualeDesc, C: costo_specifico||0, Ceff, Sed: superficie||0, UE: ueSelected, Imas: imax },
                     steps: [
                         `Percentuale incentivazione: ${percentualeDesc}`,
-                        ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${percentuale.toFixed(2)})` : `  Premio Prodotti UE: non applicato`,
-                        `Ceff=min(${(costo_specifico||0).toFixed(2)}, ${cmax})=${Ceff.toFixed(2)}`,
-                        `Base=${percentuale.toFixed(4)}×${Ceff.toFixed(2)}×${(superficie||0).toFixed(2)}=${base.toFixed(2)}`,
-                        `Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`
+                        ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${calculatorData.formatNumber(percentuale,2)})` : `  Premio Prodotti UE: non applicato`,
+                        `Ceff=min(${calculatorData.formatNumber(costo_specifico,2)}, ${cmax})=${calculatorData.formatNumber(Ceff,2)}`,
+                        `Base=${calculatorData.formatNumber(percentuale,4)}×${calculatorData.formatNumber(Ceff,2)}×${calculatorData.formatNumber(superficie,2)}=${calculatorData.formatNumber(base,2)}`,
+                        `Finale=min(${calculatorData.formatNumber(base,2)}, ${calculatorData.formatNumber(imax)})=${calculatorData.formatNumber(finale,2)}`
                     ]
                 };
             }
@@ -1429,15 +1480,15 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     incentivoTotale += incentivoRigaFinale;
 
                     steps.push(`Riga ${index + 1}: ${tipologiaLabel}`);
-                    steps.push(`  Superficie: ${superficie.toFixed(2)} m²`);
-                    steps.push(`  Costo totale: ${costo_totale.toLocaleString('it-IT')} €`);
-                    steps.push(`  C = ${costo_totale.toLocaleString('it-IT')} / ${superficie.toFixed(2)} = ${costo_specifico.toFixed(2)} €/m²`);
+                    steps.push(`  Superficie: ${calculatorData.formatNumber(superficie, 2)} m²`);
+                    steps.push(`  Costo totale: ${calculatorData.formatNumber(costo_totale)} €`);
+                    steps.push(`  C = ${calculatorData.formatNumber(costo_totale)} / ${calculatorData.formatNumber(superficie, 2)} = ${calculatorData.formatNumber(costo_specifico, 2)} €/m²`);
                     steps.push(superaMassimaleC 
-                        ? `  ⚠️  Costo specifico (${costo_specifico.toFixed(2)} €/m²) supera Cmax (${cmax} €/m²)! Uso Cmax.` 
-                        : `  ✓ Costo specifico (${costo_specifico.toFixed(2)}) ≤ Cmax (${cmax})`
+                        ? `  ⚠️  Costo specifico (${calculatorData.formatNumber(costo_specifico,2)} €/m²) supera Cmax (${cmax} €/m²)! Uso Cmax.` 
+                        : `  ✓ Costo specifico (${calculatorData.formatNumber(costo_specifico,2)}) ≤ Cmax (${cmax})`
                     );
-                    steps.push(`  Incentivo riga base = ${p.toFixed(2)} × ${costoEffettivo.toFixed(2)} × ${superficie.toFixed(2)} = ${incentivoRigaBase.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
-                    steps.push(`  Incentivo riga finale = min(${incentivoRigaBase.toLocaleString('it-IT', {minimumFractionDigits: 2})}, ${imax.toLocaleString('it-IT')}) = ${incentivoRigaFinale.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
+                    steps.push(`  Incentivo riga base = ${calculatorData.formatNumber(p,2)} × ${calculatorData.formatNumber(costoEffettivo,2)} × ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(incentivoRigaBase,2)} €`);
+                    steps.push(`  Incentivo riga finale = min(${calculatorData.formatNumber(incentivoRigaBase,2)}, ${calculatorData.formatNumber(imax)}) = ${calculatorData.formatNumber(incentivoRigaFinale,2)} €`);
                     steps.push(`---`);
                 });
 
@@ -1496,14 +1547,14 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                 const steps = [];
                 steps.push(`Percentuale incentivazione: ${pDesc}`);
-                steps.push(ueSelected ? `UE: premio UE applicato e incluso nella percentuale (p=${p.toFixed(2)})` : `UE: non applicata`);
-                steps.push(`Ceff=min(${(costo_specifico||0).toFixed(2)}, ${cmax})=${Ceff.toFixed(2)}`);
-                steps.push(`Base=${p.toFixed(2)}×${Ceff.toFixed(2)}×${(superficie||0).toFixed(2)}=${base.toFixed(2)}`);
-                steps.push(`Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`);
+                steps.push(ueSelected ? `UE: premio UE applicato e incluso nella percentuale (p=${calculatorData.formatNumber(p,2)})` : `UE: non applicata`);
+                steps.push(`Ceff=min(${calculatorData.formatNumber(costo_specifico,2)}, ${cmax})=${calculatorData.formatNumber(Ceff,2)}`);
+                steps.push(`Base=${calculatorData.formatNumber(p,2)}×${calculatorData.formatNumber(Ceff,2)}×${calculatorData.formatNumber(superficie,2)}=${calculatorData.formatNumber(base,2)}`);
+                steps.push(`Finale=min(${calculatorData.formatNumber(base,2)}, ${calculatorData.formatNumber(imax)})=${calculatorData.formatNumber(finale,2)}`);
 
                 return {
                     result: finale,
-                    formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected ? ' (premio UE incluso nella percentuale)' : ''}; Imas=${imax.toLocaleString('it-IT')}€`,
+                    formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected ? ' (premio UE incluso nella percentuale)' : ''}; Imas=${calculatorData.formatNumber(imax)}€`,
                     variables: { p, C: costo_specifico||0, Ceff, Sed: superficie||0, Imas: imax, pDesc, UE: ueSelected },
                     steps
                 };
@@ -1605,19 +1656,19 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     case 'Standard monofase (7.4-22kW)': {
                         const n = parseInt(numero_punti, 10) || 0;
                         costoMassimoAmmissibile = 2400 * n;
-                        steps.push(`Cmax = 2400 € × N_punti (${n}) = ${costoMassimoAmmissibile.toLocaleString('it-IT')} €`);
+                        steps.push(`Cmax = 2400 € × N_punti (${n}) = ${calculatorData.formatNumber(costoMassimoAmmissibile)} €`);
                         break;
                     }
                     case 'Standard trifase (7.4-22kW)': {
                         const n = parseInt(numero_punti, 10) || 0;
                         costoMassimoAmmissibile = 8400 * n;
-                        steps.push(`Cmax = 8400 € × N_punti (${n}) = ${costoMassimoAmmissibile.toLocaleString('it-IT')} €`);
+                        steps.push(`Cmax = 8400 € × N_punti (${n}) = ${calculatorData.formatNumber(costoMassimoAmmissibile)} €`);
                         break;
                     }
                     case 'Media (22-50kW)': {
                         const p = parseFloat(potenza || 0);
                         costoMassimoAmmissibile = p * 1200;
-                        steps.push(`Cmax = P × 1200 €/kW = ${p.toFixed(1)} × 1200 = ${costoMassimoAmmissibile.toLocaleString('it-IT')} €`);
+                        steps.push(`Cmax = P × 1200 €/kW = ${calculatorData.formatNumber(p,1)} × 1200 = ${calculatorData.formatNumber(costoMassimoAmmissibile)} €`);
                         break;
                     }
                     case 'Alta (50-100kW)': costoMassimoAmmissibile = 60000; steps.push(`Cmax = 60.000 € per infrastruttura`); break;
@@ -1627,8 +1678,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const spesa = parseFloat(costo_totale || 0) || 0;
                 const spesaAmmissibile = Math.min(spesa, costoMassimoAmmissibile);
                 const incentivo = percentuale * spesaAmmissibile;
-                steps.push(`Spesa ammissibile = min(Spesa, Cmax) = min(${spesa.toLocaleString('it-IT')}, ${costoMassimoAmmissibile.toLocaleString('it-IT')}) = ${spesaAmmissibile.toLocaleString('it-IT')}`);
-                steps.push(`Itot = p × Spesa ammissibile = ${percentuale.toFixed(4)} × ${spesaAmmissibile.toLocaleString('it-IT')} = ${incentivo.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
+                steps.push(`Spesa ammissibile = min(Spesa, Cmax) = min(${calculatorData.formatNumber(spesa)}, ${calculatorData.formatNumber(costoMassimoAmmissibile)}) = ${calculatorData.formatNumber(spesaAmmissibile)}`);
+                steps.push(`Itot = p × Spesa ammissibile = ${calculatorData.formatNumber(percentuale,4)} × ${calculatorData.formatNumber(spesaAmmissibile)} = ${calculatorData.formatNumber(incentivo,2)} €`);
                 return { result: incentivo, formula:`Itot = p × min(Spesa, Cmax)${ueSelected ? ' (Prodotti UE inclusi nella percentuale)' : ''}`, variables:{Spesa:spesa, Cmax:costoMassimoAmmissibile, SpesaAmm:spesaAmmissibile, p:percentuale, pDesc:percentualeDesc, UE:ueSelected}, steps };
             }
         },
@@ -1718,14 +1769,14 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 // Piccolo comune non modifica la percentuale per 1.H nello explain; solo Art.48-ter imposta 100%
                 const basePercentuale = isArt48ter ? 1.0 : 0.20;
                 const percentualeApplicata = isArt48ter ? 1.0 : (basePercentuale + registroAdd);
-                const pDesc = (percentualeApplicata === 1.0) ? '100% (Art.48-ter)' : `${((basePercentuale+registroAdd)*100).toFixed(0)}% (base 20% + registro)`;
+                const pDesc = (percentualeApplicata === 1.0) ? '100% (Art.48-ter)' : `${calculatorData.formatNumber((basePercentuale+registroAdd)*100,0)}% (base 20% + registro)`;
 
                 // Costruzione dei passi esplicativi
                 steps.push(`Potenza FV (kWp): ${p}`);
                 steps.push(`Capacità accumulo (kWh): ${k}`);
                 steps.push(`Massimale FV (€/kW): ${cmaxFVPerkW}`);
                 steps.push(`Massimale accumulo (€/kWh): 1000`);
-                if (registroAdd > 0) steps.push(`Registro UE: ${registro_ue} (incrementa la percentuale di ${(registroAdd*100).toFixed(0)} punti percentuali)`);
+                if (registroAdd > 0) steps.push(`Registro UE: ${registro_ue} (incrementa la percentuale di ${calculatorData.formatNumber(registroAdd*100,0)} punti percentuali)`);
 
                 // Spesa ammissibile considerata
                 const costoFatturato = (typeof costo_totale === 'number' && !isNaN(costo_totale) && costo_totale > 0) ? costo_totale : totaleMassimali;
@@ -1733,13 +1784,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                 // Dettagli per i passi esplicativi
                 //steps.push(`Cmax base FV = ${cmaxFVPerkW} €/kWp`);
-                steps.push(`Massimale FV = ${p} × ${cmaxFVPerkW} = ${massimaleFV.toLocaleString('it-IT')} €`);
-                steps.push(`Massimale accumulo = ${k} kWh × 1000 €/kWh = ${massimaleAccumulo.toLocaleString('it-IT')} €`);
-                steps.push(`Totale massimali = ${totaleMassimali.toLocaleString('it-IT')} €`);
-                steps.push(typeof costo_totale === 'number' && costo_totale > 0 ? `Costo fatturato fornito = ${costo_totale.toLocaleString('it-IT')} €` : `Nessun costo fatturato fornito; si assume spesa ammissibile = massimali`);
-                steps.push(`Costo usata per calcolo = min(Costo fatturato, Totale massimali) = ${spesaUsataFinale.toLocaleString('it-IT')} €`);
+                steps.push(`Massimale FV = ${calculatorData.formatNumber(p)} × ${calculatorData.formatNumber(cmaxFVPerkW)} = ${calculatorData.formatNumber(massimaleFV)} €`);
+                steps.push(`Massimale accumulo = ${calculatorData.formatNumber(k)} kWh × 1000 €/kWh = ${calculatorData.formatNumber(massimaleAccumulo)} €`);
+                steps.push(`Totale massimali = ${calculatorData.formatNumber(totaleMassimali)} €`);
+                steps.push(typeof costo_totale === 'number' && costo_totale > 0 ? `Costo fatturato fornito = ${calculatorData.formatNumber(costo_totale)} €` : `Nessun costo fatturato fornito; si assume spesa ammissibile = massimali`);
+                steps.push(`Costo usata per calcolo = min(Costo fatturato, Totale massimali) = ${calculatorData.formatNumber(spesaUsataFinale)} €`);
                 steps.push(`Percentuale applicata: ${pDesc}`);
-                steps.push(`Itot = p × Spesa usata = ${percentualeApplicata.toFixed(2)} × ${spesaUsataFinale.toLocaleString('it-IT')} = ${(percentualeApplicata*spesaUsataFinale).toLocaleString('it-IT', {minimumFractionDigits: 2})} €`);
+                steps.push(`Itot = p × Spesa usata = ${calculatorData.formatNumber(percentualeApplicata,2)} × ${calculatorData.formatNumber(spesaUsataFinale)} = ${calculatorData.formatNumber(percentualeApplicata*spesaUsataFinale,2)} €`);
 
                 // Requisiti tecnici e modalità di erogazione (informativi)
                 steps.push('Requisiti tecnici: moduli FV con rendimento ≥90% dopo 10 anni; inverter rendimento UE ≥97%.');
@@ -1950,19 +2001,19 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                     steps.push(`Riga ${idx+1} (${tipo_pompa} - Pr=${Pr} kW, zona ${zona}):`);
                     steps.push(`• ${metric} inserito = ${userValue}; minimo Ecodesign (${metric}) = ${minValue}` + (notCompliant ? ' → ATTENZIONE: NON conforme al requisito Ecodesign' : ''));
-                    steps.push(`• kp = ${metric} / ${metric}_min = ${userValue.toFixed(3)} / ${minValue.toFixed(3)} = ${kp.toFixed(3)}`);
-                    steps.push(`• Quf (ore/anno per zona ${zona}) = ${Quf}`);
-                    steps.push(`• Qu = Pr × Quf = ${Pr} kW × ${Quf} h = ${Qu.toFixed(2)} kWh/anno`);
-                    steps.push(`• Fattore = (1 - 1/SCOP) = 1 - 1/${(scop||userValue)} = ${oneMinusInvScop.toFixed(6)}`);
-                    steps.push(`• EI = Qu × Fattore × kp = ${Qu.toFixed(2)} × ${oneMinusInvScop.toFixed(6)} × ${kp.toFixed(3)} = ${EI.toFixed(2)}`);
-                    steps.push(`• Ci = ${Ci===null? 'N/D' : Ci} → Ia_annuo = Ci × EI = ${Ia_annuo.toFixed(2)}; durata = ${durata} anni → incentivo € ${totale.toFixed(2)}`);
+                    steps.push(`• kp = ${metric} / ${metric}_min = ${calculatorData.formatNumber(userValue,3)} / ${calculatorData.formatNumber(minValue,3)} = ${calculatorData.formatNumber(kp,3)}`);
+                    steps.push(`• Quf (ore/anno per zona ${zona}) = ${calculatorData.formatNumber(Quf,0)}`);
+                    steps.push(`• Qu = Pr × Quf = ${calculatorData.formatNumber(Pr,2)} kW × ${calculatorData.formatNumber(Quf,0)} h = ${calculatorData.formatNumber(Qu,2)} kWh/anno`);
+                    steps.push(`• Fattore = (1 - 1/SCOP) = 1 - 1/${calculatorData.formatNumber((scop||userValue),3)} = ${calculatorData.formatNumber(oneMinusInvScop,6)}`);
+                    steps.push(`• EI = Qu × Fattore × kp = ${calculatorData.formatNumber(Qu,2)} × ${calculatorData.formatNumber(oneMinusInvScop,6)} × ${calculatorData.formatNumber(kp,3)} = ${calculatorData.formatNumber(EI,2)}`);
+                    steps.push(`• Ci = ${Ci===null? 'N/D' : calculatorData.formatNumber(Ci,3)} → Ia_annuo = Ci × EI = ${calculatorData.formatNumber(Ia_annuo,2)}; durata = ${durata} anni → incentivo € ${calculatorData.formatNumber(totale,2)}`);
                     steps.push('----------------------------------------');
                 });
 
                 // Final summary: total incentive across all pump rows
                 steps.push('');
                 steps.push('Riepilogo totale:');
-                steps.push(`Totale incentivo calcolato per tutte le pompe: € ${total.toFixed(2)}`);
+                steps.push(`Totale incentivo calcolato per tutte le pompe: € ${calculatorData.formatNumber(total,2)}`);
 
                 // Apply cap based on top-level costo_totale and percentuale incentivabile (determinePercentuale)
                 contextData = contextData || {};
@@ -1980,16 +2031,16 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 if (cap > 0) {
                     const capped = Math.min(total, cap);
                     if (capped !== total) {
-                        steps.push(`Applicato tetto: min(incentivo_calcolato, p × costo_totale) = min(€${total.toFixed(2)}, ${ (detP*100).toFixed(2) }% × €${costInput.toLocaleString('it-IT') }) = €${capped.toFixed(2)}`);
+                        steps.push(`Applicato tetto: min(incentivo_calcolato, p × costo_totale) = min(€${calculatorData.formatNumber(total,2)}, ${ calculatorData.formatNumber(detP*100,2) }% × €${calculatorData.formatNumber(costInput,2)} ) = €${calculatorData.formatNumber(capped,2)}`);
                     } else {
-                        steps.push(`Nessun tetto applicato: tetto p×costo = €${cap.toFixed(2)} >= incentivo calcolato`);
+                        steps.push(`Nessun tetto applicato: tetto p×costo = €${calculatorData.formatNumber(cap,2)} >= incentivo calcolato`);
                     }
                     finalResult = Math.min(total, cap);
                 } else {
                     steps.push('Nessun costo totale fornito o percentuale incentivabile assente: nessun tetto applicato.');
                 }
 
-                steps.push(`Totale incentivo erogabile finale: € ${finalResult.toFixed(2)}`);
+                steps.push(`Totale incentivo erogabile finale: € ${calculatorData.formatNumber(finalResult,2)}`);
 
                 return { result: finalResult, steps, formula: 'min(Imas_calcolato, p × costo_totale)', variables: { rowsCount: rows.length, totale_calcolato: total, costo_totale_input: costInput, percentuale_p: detP, tetto: cap } };
             }
@@ -2239,7 +2290,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const { capacita, classe_energetica, costo_totale } = params; const cap=capacita||0;
                 let imax; if (classe_energetica==='Classe A') imax = cap<=150?500:1100; else imax = cap<=150?700:1500;
                 const base = 0.40*(costo_totale||0); const finale=Math.min(base, imax);
-                return { result: finale, formula:`Itot = 40% × Spesa; Imas=${imax.toLocaleString('it-IT')}€`, variables:{Spesa:costo_totale||0,Imas:imax}, steps:[`Base=0.40×${(costo_totale||0).toFixed(2)}=${base.toFixed(2)}`,`Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`] };
+                return { result: finale, formula:`Itot = 40% × Spesa; Imas=${calculatorData.formatNumber(imax)}€`, variables:{Spesa:costo_totale||0,Imas:imax}, steps:[`Base=0.40×${calculatorData.formatNumber((costo_totale||0),2)}=${calculatorData.formatNumber(base,2)}`,`Finale=min(${calculatorData.formatNumber(base,2)}, ${calculatorData.formatNumber(imax)})=${calculatorData.formatNumber(finale,2)}`] };
             }
         },
         'teleriscaldamento': {
@@ -2292,7 +2343,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'teleriscaldamento');
                 const percentuale = det.p;
                 const costoAmmissibile = P * cmax; const costoEffettivo = Math.min(costo_totale || 0, costoAmmissibile); const base = percentuale * costoEffettivo; const finale = Math.min(base, imax);
-                return { result: finale, formula:`Itot = ${Math.round(percentuale*100)}% × min(Spesa, Pn × Cmax); Imas=${imax.toLocaleString('it-IT')}€`, variables:{Spesa:costo_totale||0,Pn:P,cmax,Imas:imax, Percentuale: percentuale}, steps:[`C_amm=P×Cmax=${P}×${cmax}=${costoAmmissibile.toFixed(2)}`,`Spesa_eff=min(${(costo_totale||0).toFixed(2)}, ${costoAmmissibile.toFixed(2)})=${costoEffettivo.toFixed(2)}`,`Base=${(percentuale).toFixed(2)}×${costoEffettivo.toFixed(2)}=${base.toFixed(2)}`,`Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`] };
+                return { result: finale, formula:`Itot = ${Math.round(percentuale*100)}% × min(Spesa, Pn × Cmax); Imas=${calculatorData.formatNumber(imax)}€`, variables:{Spesa:costo_totale||0,Pn:P,cmax,Imas:imax, Percentuale: percentuale}, steps:[`C_amm=P×Cmax=${P}×${cmax}=${calculatorData.formatNumber(costoAmmissibile,2)}`,`Spesa_eff=min(${calculatorData.formatNumber((costo_totale||0),2)}, ${calculatorData.formatNumber(costoAmmissibile,2)})=${calculatorData.formatNumber(costoEffettivo,2)}`,`Base=${calculatorData.formatNumber(percentuale,2)}×${calculatorData.formatNumber(costoEffettivo,2)}=${calculatorData.formatNumber(base,2)}`,`Finale=min(${calculatorData.formatNumber(base,2)}, ${calculatorData.formatNumber(imax)})=${calculatorData.formatNumber(finale,2)}`] };
             }
         },
         'microcogenerazione': {
@@ -2327,7 +2378,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'microcogenerazione');
                 const percentuale = det.p;
                 const costoAmm = P * cmax; const costoEff = Math.min(costo_totale || 0, costoAmm); const base = percentuale * costoEff; const finale = Math.min(base, imax);
-                return { result: finale, formula:`Itot = ${Math.round(percentuale*100)}% × min(Spesa, P_el × 5000€/kWe); Imas=${imax.toLocaleString('it-IT')}€`, variables:{Spesa:costo_totale||0,P_el:P,Imas:imax, Percentuale: percentuale}, steps:[`C_amm=P_el×5000=${P}×5000=${costoAmm.toFixed(2)}`,`Spesa_eff=min(${(costo_totale||0).toFixed(2)}, ${costoAmm.toFixed(2)})=${costoEff.toFixed(2)}`,`Base=${(percentuale).toFixed(2)}×${costoEff.toFixed(2)}=${base.toFixed(2)}`,`Finale=min(${base.toFixed(2)}, ${imax})=${finale.toFixed(2)}`] };
+                return { result: finale, formula:`Itot = ${Math.round(percentuale*100)}% × min(Spesa, P_el × 5000€/kWe); Imas=${calculatorData.formatNumber(imax)}€`, variables:{Spesa:costo_totale||0,P_el:P,Imas:imax, Percentuale: percentuale}, steps:[`C_amm=P_el×5000=${P}×5000=${calculatorData.formatNumber(costoAmm,2)}`,`Spesa_eff=min(${calculatorData.formatNumber((costo_totale||0),2)}, ${calculatorData.formatNumber(costoAmm,2)})=${calculatorData.formatNumber(costoEff,2)}`,`Base=${calculatorData.formatNumber(percentuale,2)}×${calculatorData.formatNumber(costoEff,2)}=${calculatorData.formatNumber(base,2)}`,`Finale=min(${calculatorData.formatNumber(base,2)}, ${calculatorData.formatNumber(imax)})=${calculatorData.formatNumber(finale,2)}`] };
             }
         },
         'diagnosi-energetica': {
@@ -2490,19 +2541,19 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     },
                     steps: [
                         `Tipo edificio: ${tipoDescrizione}`,
-                        `Superficie: ${superficie_edificio.toLocaleString('it-IT')} m²`,
-                        `Costo specifico: ${costoSpecifico.toFixed(2)} €/m²`,
+                        `Superficie: ${calculatorData.formatNumber(superficie_edificio)} m²`,
+                        `Costo specifico: ${calculatorData.formatNumber(costoSpecifico,2)} €/m²`,
                         `Percentuale incentivazione: ${percentualeDesc}`,
-                        `Costo massimo riconosciuto: ${superficie_edificio.toLocaleString('it-IT')} × ${costoSpecifico.toFixed(2)} = ${costoMassimoRiconosciuto.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`,
+                        `Costo massimo riconosciuto: ${calculatorData.formatNumber(superficie_edificio)} × ${calculatorData.formatNumber(costoSpecifico,2)} = ${calculatorData.formatNumber(costoMassimoRiconosciuto,2)} €`,
                         superaCostoMax 
-                            ? `⚠️ Costo sostenuto (${costo_sostenuto.toLocaleString('it-IT', {minimumFractionDigits: 2})} €) supera il massimo! Uso ${costoMassimoRiconosciuto.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`
-                            : `✓ Costo sostenuto (${costo_sostenuto.toLocaleString('it-IT', {minimumFractionDigits: 2})} €) entro il limite`,
-                        `Costo effettivo: ${costoEffettivo.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`,
-                        `Incentivo calcolato: ${costoEffettivo.toLocaleString('it-IT', {minimumFractionDigits: 2})} × ${(percentuale*100).toFixed(0)}% = ${incentivoCalcolato.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`,
+                            ? `⚠️ Costo sostenuto (${calculatorData.formatNumber(costo_sostenuto,2)} €) supera il massimo! Uso ${calculatorData.formatNumber(costoMassimoRiconosciuto,2)} €`
+                            : `✓ Costo sostenuto (${calculatorData.formatNumber(costo_sostenuto,2)} €) entro il limite`,
+                        `Costo effettivo: ${calculatorData.formatNumber(costoEffettivo,2)} €`,
+                        `Incentivo calcolato: ${calculatorData.formatNumber(costoEffettivo,2)} × ${(percentuale*100).toFixed(0)}% = ${calculatorData.formatNumber(incentivoCalcolato,2)} €`,
                         superaVMax 
-                            ? `⚠️ Supera valore massimo erogabile! Limite: ${valoreMassimoErogabile.toLocaleString('it-IT')} €`
-                            : `✓ Entro valore massimo erogabile (${valoreMassimoErogabile.toLocaleString('it-IT')} €)`,
-                        `Incentivo finale: ${incentivoFinale.toLocaleString('it-IT', {minimumFractionDigits: 2})} €`
+                            ? `⚠️ Supera valore massimo erogabile! Limite: ${calculatorData.formatNumber(valoreMassimoErogabile)} €`
+                            : `✓ Entro valore massimo erogabile (${calculatorData.formatNumber(valoreMassimoErogabile)} €)`,
+                        `Incentivo finale: ${calculatorData.formatNumber(incentivoFinale,2)} €`
                     ]
                 };
             }
@@ -2679,7 +2730,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         baseIncentive: incentivo100,
                         appliedPremiums: [{ id: 'incentivo-100-auto', name: `Incentivo al 100% - ${incentivo100Reason}`, value: incentivo100 }],
                         finalIncentive: incentivo100,
-                        note: `100% spesa (€${costInput.toLocaleString('it-IT')}), max Imas €${imas.toLocaleString('it-IT')}`
+                        note: `100% spesa (€${calculatorData.formatNumber(costInput)}), max Imas €${calculatorData.formatNumber(imas)}`
                     });
                     sumBaseIncentives += incentivo100;
                     applied100Total += incentivo100;
@@ -2691,7 +2742,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         baseIncentive: imas,
                         appliedPremiums: [],
                         finalIncentive: imas,
-                        note: `Imas calcolato: €${imas.toLocaleString('it-IT')}`
+                        note: `Imas calcolato: €${calculatorData.formatNumber(imas)}`
                     });
                     sumBaseIncentives += imas;
                 }
@@ -2699,8 +2750,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
             if (applied100Count > 0) {
                 let premiumNote = isArt48ter
-                    ? `Art. 48-ter applicato automaticamente per ${contextData.buildingSubcategory}. Incentivo al 100% della spesa ammissibile (totale spesa: €${totalCost.toLocaleString('it-IT')}, tetto massimo: €${totalImas.toLocaleString('it-IT')})`
-                    : `Maggiorazione per Comune sotto 15.000 abitanti applicata per alcuni interventi. Incentivo al 100% della spesa ammissibile per gli interventi ammissibili (totale spesa: €${totalCost.toLocaleString('it-IT')}, tetto massimo: €${totalImas.toLocaleString('it-IT')}).`;
+                    ? `Art. 48-ter applicato automaticamente per ${contextData.buildingSubcategory}. Incentivo al 100% della spesa ammissibile (totale spesa: €${calculatorData.formatNumber(totalCost)}, tetto massimo: €${calculatorData.formatNumber(totalImas)})`
+                    : `Maggiorazione per Comune sotto 15.000 abitanti applicata per alcuni interventi. Incentivo al 100% della spesa ammissibile per gli interventi ammissibili (totale spesa: €${calculatorData.formatNumber(totalCost)}, tetto massimo: €${calculatorData.formatNumber(totalImas)}).`;
 
                 return {
                     total: sumBaseIncentives,
