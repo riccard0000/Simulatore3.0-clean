@@ -65,6 +65,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         const hasFraction = Math.abs(rounded - Math.trunc(rounded)) > 0;
         return rounded.toLocaleString('it-IT', { minimumFractionDigits: hasFraction ? 1 : 0, maximumFractionDigits: 2 });
     },
+    // Format currency: returns formatted number followed by a space and the euro sign
+    // Usage: calculatorData.formatCurrency(value, digits)
+    formatCurrency: function(value, digits) {
+        const n = this.formatNumber(value, digits);
+        if (n === '') return '';
+        return n + ' €';
+    },
     // STEP 1: Soggetti Ammessi (chi ha disponibilità dell'immobile)
     subjectTypes: [
         {
@@ -992,7 +999,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     steps.push(`  C = ${calculatorData.formatNumber(costo_totale,2)} / ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(costo_specifico,2)} €/m²`);
                     steps.push(superaMassimale 
                         ? `  ⚠️  C supera Cmax! Uso Cmax=${calculatorData.formatNumber(cmax,2)} €/m²` 
-                        : `  ✓ C (${calculatorData.formatNumber(costo_specifico,2)}) ≤ Cmax (${calculatorData.formatNumber(cmax,2)})`
+                        : `  ✓ C (${calculatorData.formatNumber(costo_specifico,2)} €/m²) ≤ Cmax (${calculatorData.formatNumber(cmax,2)} €/m²)`
                     );
                     steps.push(`  Incentivo riga = ${calculatorData.formatNumber(percentuale,2)} × ${calculatorData.formatNumber(costoEffettivo,2)} × ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(incentivoRiga,2)} €`);
                    
@@ -1008,10 +1015,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 return {
                     result: finale,
                     formula: `Itot = Σ [p × min(Ci, Cmax,i) × Sint,i]${ueSelected ? ' (Prodotti UE inclusi nella percentuale)' : ''}`,
+                    // unify p/pDesc: present readable `p` and keep numeric `p_value`
                     variables: {
                         NumeroRighe: righe_opache.length,
-                        p: percentuale,
-                        pDesc: percentualeDesc,
+                        p: percentualeDesc,
+                        p_value: percentuale,
                         ZonaClimatica: zona_climatica,
                         UE: ueSelected,
                         Imas: imas
@@ -1102,9 +1110,10 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 return {
                     result: finale,
                     formula: `Itot = p × min(C, ${cmaxInfissi}) × Sint; Imas=${calculatorData.formatNumber(imas)}€`,
+                    // unify p/pDesc: present readable `p` and keep numeric `p_value`
                     variables: { 
-                        p: percentuale, 
-                        pDesc: percentualeDesc,
+                        p: percentualeDesc, 
+                        p_value: percentuale,
                         C: costo_specifico || 0, 
                         Cmax: cmaxInfissi,
                         Ceff: costoEffettivo, 
@@ -1120,7 +1129,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         `C = ${calculatorData.formatNumber(costo_specifico,2)} €/m²`,
                         superaCmax 
                             ? `⚠️  C supera Cmax! Uso Cmax=${cmaxInfissi} €/m²` 
-                            : `✓ C (${calculatorData.formatNumber(costo_specifico,2)}) ≤ Cmax (${cmaxInfissi})`,
+                            : `✓ C (${calculatorData.formatNumber(costo_specifico,2)} €/m²) ≤ Cmax (${calculatorData.formatNumber(cmaxInfissi,2)} €/m²)`,
                         `Ceff = min(${calculatorData.formatNumber(costo_specifico,2)}, ${cmaxInfissi}) = ${calculatorData.formatNumber(costoEffettivo,2)} €/m²`,
                         `Base = ${calculatorData.formatNumber(percentuale,2)} × ${calculatorData.formatNumber(costoEffettivo,2)} × ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(base,2)} €`,
                         ueApplicata 
@@ -1268,8 +1277,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     steps.push(`  Costo totale: ${calculatorData.formatNumber(costo_totale)} €`);
                     steps.push(`  C = ${calculatorData.formatNumber(costo_totale)} / ${calculatorData.formatNumber(superficie, 2)} = ${calculatorData.formatNumber(costo_specifico, 2)} €/m²`);
                     steps.push(superaMassimaleC 
-                        ? `  ⚠️  Costo specifico (${calculatorData.formatNumber(costo_specifico,2)} €/m²) supera Cmax (${cmax} €/m²)! Uso Cmax.` 
-                        : `  ✓ Costo specifico (${calculatorData.formatNumber(costo_specifico,2)}) ≤ Cmax (${cmax})`
+                        ? `  ⚠️  Costo specifico (${calculatorData.formatNumber(costo_specifico,2)} €/m²) supera Cmax (${calculatorData.formatNumber(cmax,2)} €/m²)! Uso Cmax.` 
+                        : `  ✓ Costo specifico (${calculatorData.formatNumber(costo_specifico,2)} €/m²) ≤ Cmax (${calculatorData.formatNumber(cmax,2)} €/m²)`
                     );
                     steps.push(`  Incentivo riga base = ${calculatorData.formatNumber(p,2)} × ${calculatorData.formatNumber(costoEffettivo,2)} × ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(incentivoRigaBase,2)} €`);
                     steps.push(`  Incentivo riga finale = min(${calculatorData.formatNumber(incentivoRigaBase,2)}, ${calculatorData.formatNumber(imax)}) = ${calculatorData.formatNumber(incentivoRigaFinale,2)} €`);
@@ -1281,7 +1290,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     formula: `Itot = Σ [min(p × min(Ci, Cmax,i) × Sint,i × UE, Imas,i)]`,
                     variables: {
                         NumeroRighe: righe_schermature.length,
-                        p: p,
+                        p: pDesc,
+                        p_value: p,
                         UE: ueSelected,
                     },
                     steps
@@ -1345,7 +1355,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 return {
                     result: finale,
                     formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected?' (premio UE incluso nella percentuale)':''}; Imas=${calculatorData.formatNumber(imax)}€`,
-                    variables: { p: percentuale, pDesc: percentualeDesc, C: costo_specifico||0, Ceff, Sed: superficie||0, UE: ueSelected, Imas: imax },
+                    // unify p and pDesc: present only `p` as descriptive string; keep numeric in `p_value` for programmatic use
+                    variables: { p: percentualeDesc, p_value: percentuale, C: (costo_specifico||0) ? (calculatorData.formatNumber(costo_specifico,2) + ' €/m²') : 0, Ceff: Ceff ? (calculatorData.formatNumber(Ceff,2) + ' €/m²') : 0, Sed: superficie||0, UE: ueSelected, Imas: calculatorData.formatCurrency(imax, 0) },
                     steps: [
                         `Percentuale incentivazione: ${percentualeDesc}`,
                         ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${calculatorData.formatNumber(percentuale,2)})` : `  Premio Prodotti UE: non applicato`,
@@ -1484,8 +1495,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     steps.push(`  Costo totale: ${calculatorData.formatNumber(costo_totale)} €`);
                     steps.push(`  C = ${calculatorData.formatNumber(costo_totale)} / ${calculatorData.formatNumber(superficie, 2)} = ${calculatorData.formatNumber(costo_specifico, 2)} €/m²`);
                     steps.push(superaMassimaleC 
-                        ? `  ⚠️  Costo specifico (${calculatorData.formatNumber(costo_specifico,2)} €/m²) supera Cmax (${cmax} €/m²)! Uso Cmax.` 
-                        : `  ✓ Costo specifico (${calculatorData.formatNumber(costo_specifico,2)}) ≤ Cmax (${cmax})`
+                        ? `  ⚠️  Costo specifico (${calculatorData.formatNumber(costo_specifico,2)} €/m²) supera Cmax (${calculatorData.formatNumber(cmax,2)} €/m²)! Uso Cmax.` 
+                        : `  ✓ Costo specifico (${calculatorData.formatNumber(costo_specifico,2)} €/m²) ≤ Cmax (${calculatorData.formatNumber(cmax,2)} €/m²)`
                     );
                     steps.push(`  Incentivo riga base = ${calculatorData.formatNumber(p,2)} × ${calculatorData.formatNumber(costoEffettivo,2)} × ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(incentivoRigaBase,2)} €`);
                     steps.push(`  Incentivo riga finale = min(${calculatorData.formatNumber(incentivoRigaBase,2)}, ${calculatorData.formatNumber(imax)}) = ${calculatorData.formatNumber(incentivoRigaFinale,2)} €`);
@@ -1497,7 +1508,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     formula: `Itot = Σ [min(p × min(Ci, Cmax,i) × Sint,i × UE, Imas,i)]`,
                     variables: {
                         NumeroRighe: righe_illuminazione.length,
-                        p: p,
+                        p: pDesc,
+                        p_value: p,
                         UE: ueSelected,
                     },
                     steps
@@ -1555,7 +1567,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 return {
                     result: finale,
                     formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected ? ' (premio UE incluso nella percentuale)' : ''}; Imas=${calculatorData.formatNumber(imax)}€`,
-                    variables: { p, C: costo_specifico||0, Ceff, Sed: superficie||0, Imas: imax, pDesc, UE: ueSelected },
+                    // unify p and pDesc: present only `p` as descriptive string; keep numeric in `p_value` for programmatic use
+                    variables: { p: pDesc, p_value: p, C: (costo_specifico||0) ? (calculatorData.formatNumber(costo_specifico,2) + ' €/m²') : 0, Ceff: Ceff ? (calculatorData.formatNumber(Ceff,2) + ' €/m²') : 0, Sed: superficie||0, Imas: calculatorData.formatCurrency(imax,0), UE: ueSelected },
                     steps
                 };
             }
@@ -1680,7 +1693,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const incentivo = percentuale * spesaAmmissibile;
                 steps.push(`Spesa ammissibile = min(Spesa, Cmax) = min(${calculatorData.formatNumber(spesa)}, ${calculatorData.formatNumber(costoMassimoAmmissibile)}) = ${calculatorData.formatNumber(spesaAmmissibile)}`);
                 steps.push(`Itot = p × Spesa ammissibile = ${calculatorData.formatNumber(percentuale,4)} × ${calculatorData.formatNumber(spesaAmmissibile)} = ${calculatorData.formatNumber(incentivo,2)} €`);
-                return { result: incentivo, formula:`Itot = p × min(Spesa, Cmax)${ueSelected ? ' (Prodotti UE inclusi nella percentuale)' : ''}`, variables:{Spesa:spesa, Cmax:costoMassimoAmmissibile, SpesaAmm:spesaAmmissibile, p:percentuale, pDesc:percentualeDesc, UE:ueSelected}, steps };
+                return { result: incentivo, formula:`Itot = p × min(Spesa, Cmax)${ueSelected ? ' (Prodotti UE inclusi nella percentuale)' : ''}`, variables:{ Spesa: spesa, Cmax: costoMassimoAmmissibile, SpesaAmm: spesaAmmissibile, p: percentualeDesc, p_value: percentuale, UE: ueSelected }, steps };
             }
         },
         'fotovoltaico-accumulo': {
@@ -1804,15 +1817,16 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     variables: {
                         potenza_fv: p,
                         capacita_accumulo_kWh: k,
-                        costo_massimo_ammissibile_fv: cmaxFVPerkW,
-                        costo_massimo_ammissibile_accumulo: 1000,
+                        costo_massimo_ammissibile_fv: calculatorData.formatNumber(cmaxFVPerkW,2) + ' €/kWp',
+                        costo_massimo_ammissibile_accumulo: calculatorData.formatNumber(1000,0) + ' €/kWh',
                        // massimaleFV: massimaleFV,
                        // massimaleAccumulo: massimaleAccumulo,
                        // totaleMassimali: totaleMassimali,
-                        costo_Fatturato: (typeof costo_totale === 'number' ? costo_totale : null),
+                        costo_Fatturato: (typeof costo_totale === 'number' ? calculatorData.formatCurrency(costo_totale,2) : null),
                        // spesaUsata: spesaUsataFinale,
-                        p: percentualeApplicata,
-                        pDesc: pDesc,
+                        // unify p/pDesc: present readable `p` and keep numeric `p_value`
+                        p: pDesc,
+                        p_value: percentualeApplicata,
                         registro_ue: registro_ue || null
                     },
                     steps
@@ -2042,7 +2056,19 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                 steps.push(`Totale incentivo erogabile finale: € ${calculatorData.formatNumber(finalResult,2)}`);
 
-                return { result: finalResult, steps, formula: 'min(Imas_calcolato, p × costo_totale)', variables: { rowsCount: rows.length, totale_calcolato: total, costo_totale_input: costInput, percentuale_p: detP, tetto: cap } };
+                return { 
+                    result: finalResult, 
+                    steps, 
+                    formula: 'min(Imas_calcolato, p × costo_totale)', 
+                    variables: { 
+                        rowsCount: rows.length, 
+                        // Formattati come valuta per chiarezza nella tabella di dettaglio
+                        totale_calcolato: calculatorData.formatCurrency(total, 2), 
+                        costo_totale_input: calculatorData.formatCurrency(costInput, 2), 
+                        percentuale_p: detP, 
+                        tetto: calculatorData.formatCurrency(cap, 2) 
+                    } 
+                };
             }
         },
         'sistemi-ibridi': {
@@ -2532,11 +2558,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     formula: `I = min(min(Costo sostenuto, Superficie × C_specifico) × Percentuale, V_max)`,
                     variables: { 
                         Superficie: superficie_edificio,
-                        CostoSpecifico: costoSpecifico,
+                        CostoSpecifico: calculatorData.formatNumber(costoSpecifico,2) + ' €/m²',
                         Percentuale: percentuale,
                         PercentualeDesc: percentualeDesc,
-                        CostoSostenuto: costo_sostenuto,
-                        ValoreMassimoErogabile: valoreMassimoErogabile,
+                        CostoSostenuto: calculatorData.formatCurrency(costo_sostenuto,2),
+                        ValoreMassimoErogabile: calculatorData.formatCurrency(valoreMassimoErogabile,0),
                         TipoEdificio: tipoDescrizione
                     },
                     steps: [
