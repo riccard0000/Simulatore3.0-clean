@@ -372,37 +372,53 @@ async function initCalculator() {
                 const rowData = state.inputValues[interventionId][inputId][rowIndex] || {};
                 cellInput.value = col.compute(rowData);
             } else if (col.type === 'select') {
-                // Imposta il valore di default (prima opzione) appena la riga viene creata
-                const defaultValue = cellInput.options?.[0]?.value ?? '';
-                cellInput.value = defaultValue;
-                state.inputValues[interventionId][inputId][rowIndex][col.id] = defaultValue;
-
-                // If this is the tipo_pompa select, store the full original options list
-                // so we can rebuild it later when alimentazione changes.
+                // For most selects we keep the existing behavior of defaulting to the
+                // first option. However, for the pump type select (`tipo_pompa`) we
+                // must NOT auto-select a value when adding a new row: we insert a
+                // placeholder empty option and leave the value unset so the user
+                // actively chooses the pump type.
                 if (col.id === 'tipo_pompa') {
+                    // Insert a non-selectable placeholder as the first option
+                    const placeholder = document.createElement('option');
+                    placeholder.value = '';
+                    placeholder.textContent = '— Seleziona tipo pompa —';
+                    placeholder.disabled = true;
+                    placeholder.selected = true;
+                    // insert placeholder before any existing options
+                    if (cellInput.firstChild) cellInput.insertBefore(placeholder, cellInput.firstChild); else cellInput.appendChild(placeholder);
+
+                    // Store the full original options list (including placeholder)
                     try {
                         const all = Array.from(cellInput.options).map(o => ({ value: o.value, label: o.textContent }));
                         cellInput.dataset.allOptions = JSON.stringify(all);
-                        // If a helper exists in data.js, filter options according to alimentazione
+                        // If alimentazione helper exists, filter to allowed options but
+                        // do not auto-select a type: keep placeholder as selected.
                         const alimentazioneElTmp = tr.querySelector('[data-column-id="alimentazione"]');
                         const alimentazioneValTmp = alimentazioneElTmp ? (alimentazioneElTmp.value || 'Elettrica') : 'Elettrica';
                         if (typeof getPumpTypesForAlimentazione === 'function') {
                             const allowed = getPumpTypesForAlimentazione(alimentazioneValTmp) || null;
                             if (Array.isArray(allowed)) {
                                 Array.from(cellInput.options).forEach(opt => {
-                                    if (!allowed.includes(opt.value)) {
+                                    // keep placeholder (empty value) always, filter others
+                                    if (opt.value && !allowed.includes(opt.value)) {
                                         try { opt.remove(); } catch (e) { /* ignore */ }
                                     }
                                 });
-                                // ensure selected value is allowed
-                                if (![...cellInput.options].some(o => o.value === cellInput.value)) {
-                                    const newVal = cellInput.options?.[0]?.value || '';
-                                    cellInput.value = newVal;
-                                    state.inputValues[interventionId][inputId][rowIndex][col.id] = newVal;
+                                // Ensure that if placeholder is removed for some reason,
+                                // there's still a non-selected empty option at the top.
+                                if (![...cellInput.options].some(o => o.value === '')) {
+                                    const ph = document.createElement('option'); ph.value = ''; ph.textContent = '— Seleziona tipo pompa —'; ph.disabled = true; ph.selected = true; cellInput.insertBefore(ph, cellInput.firstChild);
                                 }
                             }
                         }
                     } catch (e) { /* ignore */ }
+                    // Do not write any value into state for tipo_pompa here; leave it
+                    // unset so the user must choose it explicitly.
+                } else {
+                    // Imposta il valore di default (prima opzione) appena la riga viene creata
+                    const defaultValue = cellInput.options?.[0]?.value ?? '';
+                    cellInput.value = defaultValue;
+                    state.inputValues[interventionId][inputId][rowIndex][col.id] = defaultValue;
                 }
 
                 // If this is the alimentazione select, attach a listener to update tipo_pompa options
@@ -3094,6 +3110,104 @@ function prepareParamsForCalculation(input) {
 
     return normalized;
 }
+
+// -----------------------------
+// Document Intelligence caching
+// -----------------------------
+// Utility to compute a SHA-256 hex hash for a File/Blob or ArrayBuffer.
+async function computeHashHex(input) {
+    let buffer;
+    if (input instanceof ArrayBuffer) {
+        buffer = input;
+    } else if (input && typeof input.arrayBuffer === 'function') {
+        buffer = await input.arrayBuffer();
+    } else if (typeof input === 'string') {
+        // encode string
+        buffer = new TextEncoder().encode(input).buffer;
+    } else {
+        throw new Error('Unsupported input for hash computation');
+    }
+
+    // Use Web Crypto when available, otherwise Node's crypto
+    if (typeof crypto !== 'undefined' && crypto.subtle && typeof crypto.subtle.digest === 'function') {
+        const digest = await crypto.subtle.digest('SHA-256', buffer);
+        const hex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+        return hex;
+    }
+    // Node fallback (for tests running in Node env)
+    if (typeof require === 'function') {
+        try {
+            const nodeCrypto = require('crypto');
+            const h = nodeCrypto.createHash('sha256').update(Buffer.from(buffer)).digest('hex');
+            return h;
+        } catch (e) {
+            // continue to error
+        }
+    }
+    throw new Error('No crypto.subtle or Node crypto available for hashing');
+}
+
+// Local cache: simple JSON store in localStorage under key prefix 'doccache:'.
+// Each entry contains { ts, result } where result is the processing output.
+function _cacheKey(hash) { return `doccache:${hash}`; }
+
+function getCachedProcessing(hash) {
+    try {
+        const raw = localStorage.getItem(_cacheKey(hash));
+        if (!raw) return null;
+        const obj = JSON.parse(raw);
+        return obj && obj.result !== undefined ? obj : null;
+    } catch (e) { console.warn('getCachedProcessing error', e); return null; }
+}
+
+function setCachedProcessing(hash, result) {
+    try {
+        const obj = { ts: Date.now(), result };
+        localStorage.setItem(_cacheKey(hash), JSON.stringify(obj));
+        return true;
+    } catch (e) { console.warn('setCachedProcessing error', e); return false; }
+}
+
+// Main helper: process a document with caching. `processorFn` is an async
+// function that receives the file/blob and returns the processing result.
+// Optional `uploadFn(result, filename)` may be provided to persist the
+// textual export to a remote blob storage (must be implemented by caller).
+// Returns { cached: boolean, hash, result }
+async function processDocumentWithCache(fileOrBuffer, processorFn, uploadFn, opts) {
+    opts = opts || {};
+    const filenamePrefix = opts.filenamePrefix || 'docintel';
+    const ensureTextExport = opts.ensureTextExport === undefined ? true : !!opts.ensureTextExport;
+
+    const hash = await computeHashHex(fileOrBuffer);
+    const cached = getCachedProcessing(hash);
+    if (cached && cached.result) {
+        return { cached: true, hash, result: cached.result };
+    }
+
+    if (typeof processorFn !== 'function') throw new Error('processorFn is required');
+    const result = await processorFn(fileOrBuffer);
+
+    // store in cache
+    try { setCachedProcessing(hash, result); } catch (e) { console.warn('could not cache result', e); }
+
+    // If provided, call uploadFn to persist a textual representation to blob storage.
+    if (typeof uploadFn === 'function') {
+        try {
+            // create a filename like docintel_<hash>.txt
+            const filename = `${filenamePrefix}_${hash}.txt`;
+            // Prefer a compact JSON text export
+            const content = ensureTextExport ? JSON.stringify({ hash, ts: Date.now(), result }, null, 2) : String(result);
+            // uploadFn may be async
+            await uploadFn(content, filename);
+        } catch (e) { console.warn('uploadFn failed', e); }
+    }
+
+    return { cached: false, hash, result };
+}
+
+// Expose cache helpers on window so other modules can reuse them.
+try { if (typeof window !== 'undefined') window.docIntelCache = { computeHashHex, getCachedProcessing, setCachedProcessing, processDocumentWithCache }; } catch (e) {}
+
 function downloadText(content, filename, mime){
     const blob = new Blob([content], { type: mime||'text/plain' });
     const url = URL.createObjectURL(blob);
