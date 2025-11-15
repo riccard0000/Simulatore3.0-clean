@@ -2168,6 +2168,9 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     let metric = spec.cop ? 'COP' : 'SCOP/SPER';
                     let userValue = metric === 'COP' ? cop : scop;
                     let minValue = metric === 'COP' ? spec.cop : spec.scop;
+                    // Human-friendly label for explain/details only: show 'COP' for COP,
+                    // 'SCOP' for electric heat pumps and 'SPER' for gas heat pumps.
+                    const metricLabel = (metric === 'COP') ? 'COP' : ((String(alimentazione || '').toLowerCase() === 'gas') ? 'SPER' : 'SCOP');
                     if (minValue === undefined || minValue === null) minValue = 1;
 
                     const Quf = qufTable[zona] || 0;
@@ -2204,7 +2207,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     const notCompliant = notCompliantMetric || notCompliantSeasonal;
 
                     steps.push(`Riga ${idx+1} (${tipo_pompa} - Pr=${Pr} kW, zona ${zona}):`);
-                    steps.push(`• ${metric} inserito = ${userValue}; minimo Ecodesign (${metric}) = ${minValue}` + (notCompliantMetric ? ' → ATTENZIONE: NON conforme al requisito Ecodesign' : ''));
+                    steps.push(`• ${metricLabel} inserito = ${userValue}; minimo Ecodesign (${metricLabel}) = ${minValue}` + (notCompliantMetric ? ' → ATTENZIONE: NON conforme al requisito Ecodesign' : ''));
                     if (seasonalMin !== null) {
                         steps.push(`• Efficienza stagionale inserita = ${eff_stagionale === null ? 'N/D' : calculatorData.formatNumber(eff_stagionale,0)}; minimo Ecodesign (ηs_min) = ${calculatorData.formatNumber(seasonalMin,0)}` + (notCompliantSeasonal ? ' → ATTENZIONE: valore inferiore al minimo richiesto' : ''));
                     }
@@ -2219,14 +2222,14 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         } else if (seasonalMin !== null && eff_stagionale !== null) {
                             steps.push(`• kp = ηs / ηs_min = ${calculatorData.formatNumber(eff_stagionale,0)} / ${calculatorData.formatNumber(seasonalMin,0)} = ${calculatorData.formatNumber(kp,3)}`);
                         } else {
-                            steps.push(`• kp (fallback) = ${metric} / ${metric}_min = ${calculatorData.formatNumber(userValue,3)} / ${calculatorData.formatNumber(minValue,3)} = ${calculatorData.formatNumber(kp,3)}`);
+                            steps.push(`• kp (fallback) = ${metricLabel} / ${metricLabel}_min = ${calculatorData.formatNumber(userValue,3)} / ${calculatorData.formatNumber(minValue,3)} = ${calculatorData.formatNumber(kp,3)}`);
                         }
                     } catch (e) {
                         steps.push(`• kp (calc) = ${calculatorData.formatNumber(kp,3)}`);
                     }
                     steps.push(`• Quf (ore/anno per zona ${zona}) = ${calculatorData.formatNumber(Quf,0)}`);
                     steps.push(`• Qu = Pr × Quf = ${calculatorData.formatNumber(Pr,2)} kW × ${calculatorData.formatNumber(Quf,0)} h = ${calculatorData.formatNumber(Qu,2)} kWh/anno`);
-                    steps.push(`• Fattore = (1 - 1/SCOP) = 1 - 1/${calculatorData.formatNumber((scop||userValue),3)} = ${calculatorData.formatNumber(oneMinusInvScop,6)}`);
+                    steps.push(`• Fattore = (1 - 1/${metricLabel}) = 1 - 1/${calculatorData.formatNumber((scop||userValue),3)} = ${calculatorData.formatNumber(oneMinusInvScop,6)}`);
                     steps.push(`• EI = Qu × Fattore × kp = ${calculatorData.formatNumber(Qu,2)} × ${calculatorData.formatNumber(oneMinusInvScop,6)} × ${calculatorData.formatNumber(kp,3)} = ${calculatorData.formatNumber(EI,2)}`);
                     steps.push(`• Ci = ${Ci===null? 'N/D' : calculatorData.formatNumber(Ci,3)} → Ia_annuo = Ci × EI = ${calculatorData.formatNumber(Ia_annuo,2)}; durata = ${durata} anni → incentivo € ${calculatorData.formatNumber(totale,2)}`);
                     steps.push('----------------------------------------');

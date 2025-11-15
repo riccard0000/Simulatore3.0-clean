@@ -1547,6 +1547,60 @@ async function initCalculator() {
         return { valid: true };
     }
 
+    // Ensure the global/site-level Zona climatica selector exists and is wired.
+    function ensureGlobalZonaClimatica() {
+        const existing = document.getElementById('global-zona-climatica-wrapper');
+        if (existing) return; // already present
+
+        const zonaWrapper = document.createElement('div');
+        zonaWrapper.id = 'global-zona-climatica-wrapper';
+        zonaWrapper.className = 'form-group';
+        zonaWrapper.style.marginTop = '12px';
+        zonaWrapper.style.padding = '12px';
+
+        const zonaLabel = document.createElement('label');
+        zonaLabel.textContent = 'Zona climatica (edificio)';
+        zonaLabel.style.display = 'block';
+        zonaLabel.style.marginBottom = '6px';
+        zonaWrapper.appendChild(zonaLabel);
+
+        const zonaSelect = document.createElement('select');
+        zonaSelect.id = 'global-zona-climatica';
+        ['','A','B','C','D','E','F'].forEach(opt => {
+            const o = document.createElement('option');
+            o.value = opt;
+            o.textContent = opt === '' ? '-- Seleziona zona climatica --' : opt;
+            zonaSelect.appendChild(o);
+        });
+        if (state.subjectSpecificData && state.subjectSpecificData.zona_climatica) {
+            zonaSelect.value = state.subjectSpecificData.zona_climatica;
+        }
+
+        zonaSelect.addEventListener('change', (e) => {
+            const v = e.target.value || null;
+            if (!state.subjectSpecificData) state.subjectSpecificData = {};
+            state.subjectSpecificData.zona_climatica = v;
+
+            (state.selectedInterventions || []).forEach(intId => {
+                if (!state.inputValues[intId]) state.inputValues[intId] = {};
+                state.inputValues[intId]['zona_climatica'] = v;
+            });
+
+            renderInterventions();
+            validateRequiredFields();
+        });
+
+        zonaWrapper.appendChild(zonaSelect);
+
+        // NOTE: intentionally no reset link — the site-level zona_climatica is
+        // persistent for the session and can be changed via the select itself.
+
+        const buildingGroup = document.getElementById('building-category-group');
+        if (buildingGroup && buildingGroup.parentNode) {
+            buildingGroup.parentNode.insertBefore(zonaWrapper, buildingGroup.nextSibling);
+        }
+    }
+
     function renderSubjectSpecificFields() {
         // Verifica se ci sono campi specifici per il soggetto selezionato
     let specificFields = calculatorData.subjectSpecificFields?.[state.selectedSubject];
@@ -1564,6 +1618,9 @@ async function initCalculator() {
         // residential selections).
         const companyTypes = ['private_tertiary_small','private_tertiary_medium','private_tertiary_large'];
         const isCompany = companyTypes.includes(state.selectedOperator);
+
+        // Ensure the site-level selector exists (implementation is in ensureGlobalZonaClimatica)
+        ensureGlobalZonaClimatica();
 
         if ((!specificFields || specificFields.length === 0) && !isCompany) {
             // Remove existing container if present
@@ -2028,22 +2085,34 @@ async function initCalculator() {
                     // Gestione input normali (select, computed, text, number, ecc.)
                     let inputEl;
                     if (input.type === 'select') {
-                    inputEl = document.createElement('select');
-                    input.options.forEach(opt => {
+                    // If a site-level zona_climatica is present, render the per-intervention
+                    // zona_climatica as a disabled select with the chosen value to make it
+                    // clearly non-editable while still visible.
+                    if (input.id === 'zona_climatica' && state.subjectSpecificData && state.subjectSpecificData.zona_climatica) {
+                        inputEl = document.createElement('select');
                         const option = document.createElement('option');
-                        // Supporta sia stringhe semplici che oggetti {value, label}
-                        if (typeof opt === 'string') {
-                            option.value = opt;
-                            option.textContent = opt;
-                        } else {
-                            option.value = opt.value;
-                            option.textContent = opt.label || opt.value;
-                            if (opt.cmax) {
-                                option.dataset.cmax = opt.cmax;
-                            }
-                        }
+                        option.value = state.subjectSpecificData.zona_climatica;
+                        option.textContent = state.subjectSpecificData.zona_climatica;
                         inputEl.appendChild(option);
-                    });
+                        inputEl.disabled = true;
+                    } else {
+                        inputEl = document.createElement('select');
+                        input.options.forEach(opt => {
+                            const option = document.createElement('option');
+                            // Supporta sia stringhe semplici che oggetti {value, label}
+                            if (typeof opt === 'string') {
+                                option.value = opt;
+                                option.textContent = opt;
+                            } else {
+                                option.value = opt.value;
+                                option.textContent = opt.label || opt.value;
+                                if (opt.cmax) {
+                                    option.dataset.cmax = opt.cmax;
+                                }
+                            }
+                            inputEl.appendChild(option);
+                        });
+                    }
                 } else if (input.type === 'computed') {
                     // Campo calcolato automaticamente (readonly)
                     inputEl = document.createElement('input');
@@ -2100,8 +2169,10 @@ async function initCalculator() {
                         state.inputValues[intId][input.id] = inputEl.value || null;
                     }
                     
-                    inputEl.addEventListener('change', handleInputChange);
-                    inputEl.addEventListener('keyup', handleInputChange);
+                    if (!inputEl.disabled) {
+                        inputEl.addEventListener('change', handleInputChange);
+                        inputEl.addEventListener('keyup', handleInputChange);
+                    }
 
                     // Se il campo è numerico e dichiara un max, comportamenti speciali per alcuni campi
                     if (input.type === 'number' && input.max !== undefined) {
