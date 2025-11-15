@@ -2,84 +2,208 @@
 // Modificando questo file è possibile aggiornare le opzioni, i parametri
 // e le logiche di calcolo senza toccare il codice principale.
 
-// Ecodesign minima per tipologia di pompa di calore.
-// La struttura supporta varianti dipendenti dal GWP e distinzioni tra SCOP (stagionale) e COP (istanteo).
-const PUMP_ECODESIGN_SPECS = {
-    'aria/aria split/multisplit': {
-        // per split/multisplit <=12 kW la minima dipende dalla fascia GWP
-        gwp: { '>150': { scop: 3.8 }, '<=150': { scop: 3.42 } }
-    },
-    'aria/aria fixed double duct': {
-        // fixed double duct richiede COP minimo (non SCOP) e dipende dalla fascia GWP
-        gwp: { '>150': { cop: 2.6 }, '<=150': { cop: 2.34 } }
-    },
-    'aria/aria vrf/vrv': { scop: 3.5 },
-    'aria/aria rooftop': { scop: 3.2 },
-    'acqua/aria': { scop: 3.625 },
-    'aria/acqua': { scop: 2.825 },
-    'acqua/acqua': { scop: 3.325 },
-    'salamoia/aria': {
-        // dove applicabile, salamoia/aria può avere variante <=12kW con GWP bands
-        gwp: { '>150': { scop: 3.8 }, '<=150': { scop: 3.42 } , default: { scop: 3.625 } }
-    },
-    'salamoia/acqua': { scop: 3.325 }
-};
+// NOTE: All pump minima and allowed types are derived from the single
+// canonical `PUMP_REGULATORY_TABLE` defined below. Legacy placeholder maps
+// have been removed to avoid duplicated sources of truth.
 
-// Efficienza stagionale minima (ηs_min) per tipologia di pompa quando prevista
-// I valori sono espressi nella scala assoluta usata in tabella (es. 137, 149, 125, 110 etc.)
-const PUMP_EFFICIENCY_MIN = {
-    'aria/aria split/multisplit': {
-        gwp: { '>150': { eta_s_min: 149 }, '<=150': { eta_s_min: 134 } }
-    },
-    'aria/aria fixed double duct': {
-        // fixed double duct non usa efficienza stagionale minima in questa scala
-    },
-    'aria/aria vrf/vrv': { eta_s_min: 137 },
-    'aria/aria rooftop': { eta_s_min: 125 },
-    'acqua/aria': { eta_s_min: 137 },
-    'aria/acqua': { eta_s_min: 110 },
-    'acqua/acqua': { eta_s_min: 110 },
-    'salamoia/aria': { gwp: { '>150': { eta_s_min: 149 }, '<=150': { eta_s_min: 134 }, default: { eta_s_min: 137 } } },
-    'salamoia/acqua': { eta_s_min: 125 }
-};
+// Strong regulatory mapping table (rows translated from the decree/table attached by the user).
+// Each entry uniquely identifies a pump category by alimentazione + tipo and optionally a power constraint or GWP band.
+// Fields:
+// - alimentazione: 'Elettrica' | 'Gas'
+// - tipo: canonical type string (matched fuzzily against input)
+// - powerConstraint: optional object { op: '<='|'>' , value: number } matching nominal power in kW
+// - gwp: optional band string '>150' or '<=150'
+// - eta_s_min: seasonal efficiency minimum (absolute % as in table)
+// - scop_min / sper_min / cop_min: minima (number)
+const PUMP_REGULATORY_TABLE = [
+    // Elettrico entries (only where the decree defines explicit minima)
+    { alimentazione: 'Elettrica', tipo: 'aria/aria split/multisplit', powerConstraint: { op: '<=', value: 12 }, gwp: '>150', eta_s_min: 149, scop_min: 3.8, ci: 0.07 },
+    { alimentazione: 'Elettrica', tipo: 'aria/aria split/multisplit', powerConstraint: { op: '<=', value: 12 }, gwp: '<=150', eta_s_min: 134, scop_min: 3.42, ci: 0.07 },
+    { alimentazione: 'Elettrica', tipo: 'aria/aria fixed double duct', powerConstraint: { op: '<=', value: 12 }, gwp: '>150', cop_min: 2.6, ci: 0.20 },
+    { alimentazione: 'Elettrica', tipo: 'aria/aria fixed double duct', powerConstraint: { op: '<=', value: 12 }, gwp: '<=150', cop_min: 2.34, ci: 0.20 },
+    { alimentazione: 'Elettrica', tipo: 'aria/aria vrf/vrv', powerConstraint: { op: '>', value: 12 }, eta_s_min: 137, scop_min: 3.5, ci: 0.15 },
+    { alimentazione: 'Elettrica', tipo: 'aria/aria rooftop', powerConstraint: { op: '>', value: 12 }, eta_s_min: 125, scop_min: 3.2, ci: 0.15 },
+    { alimentazione: 'Elettrica', tipo: 'acqua/aria', eta_s_min: 137, scop_min: 3.625, ci: 0.16 },
+    { alimentazione: 'Elettrica', tipo: 'aria/acqua', eta_s_min: 110, scop_min: 2.825, ci: 0.15 },
+    { alimentazione: 'Elettrica', tipo: 'acqua/acqua', eta_s_min: 110, scop_min: 3.325, ci: 0.16 },
+    { alimentazione: 'Elettrica', tipo: 'aria/acqua a bassa temperatura', eta_s_min: 125, scop_min: 3.2, ci: 0.15 },
+    { alimentazione: 'Elettrica', tipo: 'acqua/acqua a bassa temperatura', eta_s_min: 125, scop_min: 3.325, ci: 0.16 },
+    { alimentazione: 'Elettrica', tipo: 'salamoia/aria', powerConstraint: { op: '<=', value: 12 }, gwp: '>150', eta_s_min: 149, scop_min: 3.8, ci: 0.16 },
+    { alimentazione: 'Elettrica', tipo: 'salamoia/aria', powerConstraint: { op: '<=', value: 12 }, gwp: '<=150', eta_s_min: 134, scop_min: 3.42, ci: 0.16 },
+    { alimentazione: 'Elettrica', tipo: 'salamoia/aria', powerConstraint: { op: '>', value: 12 }, eta_s_min: 137, scop_min: 3.625, ci: 0.16 },
+    { alimentazione: 'Elettrica', tipo: 'salamoia/acqua', eta_s_min: 110, scop_min: 2.825, ci: 0.16 },
+    { alimentazione: 'Elettrica', tipo: 'salamoia/acqua a bassa temperatura', eta_s_min: 125, scop_min: 3.2, ci: 0.16 },
 
-function getPumpEfficiencyMin(tipo, gwp) {
-    const tcanon = String(tipo || '').toLowerCase();
-    for (const key of Object.keys(PUMP_EFFICIENCY_MIN)) {
-        const kcanon = key.toLowerCase();
-        if (tcanon === kcanon || tcanon.indexOf(kcanon) !== -1 || kcanon.indexOf(tcanon) !== -1) {
-            const spec = PUMP_EFFICIENCY_MIN[key];
-            if (!spec) return null;
-            if (spec.gwp) {
-                const gw = (gwp || '').toString().trim();
-                if (gw === '>150' || gw === 'GWP>150' || gw === 'GWP > 150') return spec.gwp['>150'];
-                if (gw === '<=150' || gw === 'GWP<=150' || gw === 'GWP <= 150') return spec.gwp['<=150'];
-                if (spec.gwp.default) return spec.gwp.default;
-            }
-            return spec;
+    // Gas entries (from attachment)
+    { alimentazione: 'Gas', tipo: 'aria/aria', eta_s_min: 130, scop_min: 1.33, ci: 0.07 },
+    { alimentazione: 'Gas', tipo: 'acqua/aria', eta_s_min: 130, scop_min: 1.33, ci: 0.16 },
+    { alimentazione: 'Gas', tipo: 'salamoia/aria', eta_s_min: 130, scop_min: 1.33, ci: 0.16 },
+    { alimentazione: 'Gas', tipo: 'aria/acqua', eta_s_min: 110, scop_min: 1.13, ci: 0.15 },
+    { alimentazione: 'Gas', tipo: 'acqua/acqua', eta_s_min: 110, scop_min: 1.13, ci: 0.16 },
+    { alimentazione: 'Gas', tipo: 'aria/acqua a bassa temperatura', eta_s_min: 125, scop_min: 1.28, ci: 0.15 },
+    { alimentazione: 'Gas', tipo: 'acqua/acqua a bassa temperatura', eta_s_min: 125, scop_min: 1.28, ci: 0.16 },
+    { alimentazione: 'Gas', tipo: 'salamoia/acqua', eta_s_min: 125, scop_min: 1.28, ci: 0.16 }
+];
+
+// Helper: lookup regulatory spec using strong matching rules.
+function lookupRegulatorySpec(tipo, gwp, alimentazione, potenza) {
+    const tal = String(tipo || '').toLowerCase();
+    const ag = String(alimentazione || '').toLowerCase();
+    const gw = (gwp || '').toString().trim();
+    const candidates = [];
+    for (const row of PUMP_REGULATORY_TABLE) {
+        if (String(row.alimentazione || '').toLowerCase() !== ag) continue;
+        const tcanon = String(row.tipo || '').toLowerCase();
+        if (!(tal === tcanon || tal.indexOf(tcanon) !== -1 || tcanon.indexOf(tal) !== -1)) continue;
+        // check powerConstraint if present
+        if (row.powerConstraint && typeof potenza === 'number') {
+            const op = row.powerConstraint.op;
+            const val = Number(row.powerConstraint.value || 0);
+            if (op === '<=' && !(potenza <= val)) continue;
+            if (op === '>' && !(potenza > val)) continue;
         }
+        // check gwp if present
+        if (row.gwp) {
+            if (!(gw === row.gwp || gw === ('GWP' + row.gwp) || gw === ('GWP ' + row.gwp))) continue;
+        }
+        // This row is a candidate match. Collect it and continue scanning to
+        // prefer more specific matches (longer tipo strings) or exact matches.
+        candidates.push(row);
+    }
+    if (candidates.length === 0) return null;
+    // Prefer exact tipo match
+    for (const c of candidates) {
+        if (String(c.tipo || '').toLowerCase() === tal) return c;
+    }
+    // Otherwise choose the candidate with the longest tipo string (most specific)
+    candidates.sort((a, b) => String(b.tipo || '').length - String(a.tipo || '').length);
+    return candidates[0] || null;
+}
+
+// Build derived canonical maps (single source of truth) from the regulatory table.
+// This centralizes all minima and type lists so values are not duplicated across the file.
+// No build step required: consumers should use `lookupRegulatorySpec` and
+// `getPumpTypesForAlimentazione` to obtain normative minima or allowed types.
+
+// Return distinct pump types allowed for a given alimentazione by scanning
+// the canonical regulatory table. This guarantees the UI options match the
+// normative categories exactly.
+function getPumpTypesForAlimentazione(alimentazione) {
+    const ag = String(alimentazione || 'Elettrica').toLowerCase();
+    const set = new Set();
+    for (const r of (PUMP_REGULATORY_TABLE || [])) {
+        if (!r || !r.tipo) continue;
+        if (String(r.alimentazione || '').toLowerCase() === ag) set.add(r.tipo);
+    }
+    // If none found for the requested alimentazione, fall back to all electric types
+    if (set.size === 0) {
+        for (const r of (PUMP_REGULATORY_TABLE || [])) {
+            if (!r || !r.tipo) continue;
+            if (String(r.alimentazione || '').toLowerCase() === 'elettrica') set.add(r.tipo);
+        }
+    }
+    return Array.from(set);
+}
+
+// Optional human-friendly labels for pump types. Keep this map small and
+// centralized: if you want to change a visible label, update it here.
+const PUMP_TYPE_LABELS = {
+    // 'aria/aria split/multisplit': 'Aria-Aria (split/multisplit)',
+    // add overrides here when needed
+};
+
+function humanizeTipo(tipo) {
+    if (!tipo) return '';
+    // replace slashes with spaced slashes and capitalize words
+    return String(tipo).replace(/\//g, ' / ').split(/[-_\s]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function getPumpTypeOptions() {
+    const set = new Set();
+    for (const r of (PUMP_REGULATORY_TABLE || [])) {
+        if (r && r.tipo) set.add(r.tipo);
+    }
+    return Array.from(set).map(v => ({ value: v, label: (PUMP_TYPE_LABELS[v] || humanizeTipo(v)) }));
+}
+
+function getPumpEfficiencyMin(tipo, gwp, alimentazione, potenza) {
+    const tcanon = String(tipo || '').toLowerCase();
+    // Prefer a strong regulatory match when available (uses PUMP_REGULATORY_TABLE)
+    try {
+        const reg = lookupRegulatorySpec(tipo, gwp, alimentazione, (typeof potenza === 'number') ? potenza : (Number(potenza) || undefined));
+        if (reg && (reg.eta_s_min || reg.sper_min || reg.scop_min || reg.cop_min)) {
+            const out = {};
+            if (typeof reg.eta_s_min !== 'undefined') out.eta_s_min = reg.eta_s_min;
+            // Normalize SPER into SCOP for legacy compatibility: callers expect `scop` field
+            if (typeof reg.scop_min !== 'undefined') out.scop = reg.scop_min;
+            else if (typeof reg.sper_min !== 'undefined') out.scop = reg.sper_min;
+            if (typeof reg.cop_min !== 'undefined') out.cop = reg.cop_min;
+            return out;
+        }
+    } catch (e) {
+        // ignore and fallback to legacy lookup
+    }
+    // No legacy mapping found; rely exclusively on the regulatory table (lookupRegulatorySpec)
+    return null;
+}
+
+function getPumpEcodesignSpec(tipo, gwp, alimentazione) {
+    const tcanon = String(tipo || '').toLowerCase();
+    // Prefer a strong regulatory match when available
+    try {
+        const reg = lookupRegulatorySpec(tipo, gwp, alimentazione);
+        if (reg) {
+            const spec = {};
+            if (typeof reg.scop_min !== 'undefined' || typeof reg.sper_min !== 'undefined') {
+                if (typeof reg.scop_min !== 'undefined') spec.scop = reg.scop_min;
+                if (typeof reg.sper_min !== 'undefined') spec.scop = reg.sper_min; // sper provided into scop field for legacy callers
+            }
+            if (typeof reg.cop_min !== 'undefined') spec.cop = reg.cop_min;
+            if (Object.keys(spec).length) return spec;
+        }
+    } catch (e) {
+        // ignore and fallback to legacy lookup
+    }
+    // No legacy mapping available; return null when regulatory table did not match.
+    return null;
+}
+
+// Return the normative Ci coefficient for a pump matching the given parameters.
+// Returns a number (€/m²) or null when no regulatory match is found.
+function getPumpCi(tipo, gwp, alimentazione, potenza) {
+    try {
+        const reg = lookupRegulatorySpec(tipo, gwp, alimentazione, (typeof potenza === 'number') ? potenza : (Number(potenza) || undefined));
+        if (reg && typeof reg.ci !== 'undefined') return reg.ci;
+    } catch (e) {
+        // ignore and fall through
     }
     return null;
 }
 
-function getPumpEcodesignSpec(tipo, gwp) {
-    const tcanon = String(tipo || '').toLowerCase();
-    // find best matching key
-    for (const key of Object.keys(PUMP_ECODESIGN_SPECS)) {
-        const kcanon = key.toLowerCase();
-        if (tcanon === kcanon || tcanon.indexOf(kcanon) !== -1 || kcanon.indexOf(tcanon) !== -1) {
-            const spec = PUMP_ECODESIGN_SPECS[key];
-            if (spec.gwp) {
-                // normalize gwp input to the expected band strings
-                const gw = (gwp || '').toString().trim();
-                if (gw === '>150' || gw === 'GWP>150' || gw === 'GWP > 150') return spec.gwp['>150'];
-                if (gw === '<=150' || gw === 'GWP<=150' || gw === 'GWP <= 150') return spec.gwp['<=150'];
-                // fallback to explicit default if present
-                if (spec.gwp.default) return spec.gwp.default;
-            }
-            return spec;
-        }
+// Canonical pump Ci lookup that prefers the regulatory table and falls back
+// to legacy heuristics when no table match exists. Exported as a top-level
+// helper so all modules (calculate/explain etc.) can reuse the same logic.
+function getCanonicalPumpCi(tipoRaw, gwp, alimentazione, potenza) {
+    const pnum = (potenza === undefined || potenza === null) ? undefined : Number(potenza);
+    // Try canonical lookup first
+    try {
+        const ciFromTable = getPumpCi(tipoRaw, gwp || null, alimentazione || 'Elettrica', pnum);
+        if (typeof ciFromTable === 'number') return ciFromTable;
+    } catch (e) {
+        // ignore and fall through to legacy heuristics
     }
+
+    // Legacy fallback (kept for backward compatibility when table has no match)
+    if (pnum === undefined || pnum === null || isNaN(pnum)) return null;
+    const tipo = (tipoRaw || '').toLowerCase();
+    if (tipo.includes('split') || tipo.includes('multisplit')) { if (pnum <= 12) return 0.070; return null; }
+    if (tipo.includes('fixed') && tipo.includes('double')) { if (pnum <= 12) return 0.200; return null; }
+    if (tipo.includes('vrf') || tipo.includes('vrv')) { if (pnum >= 13 && pnum <= 35) return 0.150; if (pnum > 35) return 0.055; return null; }
+    if (tipo.includes('rooftop')) { if (pnum <= 35) return 0.150; if (pnum > 35) return 0.055; return null; }
+    if (tipo.includes('aria/acqua') || tipo.includes('aria-acqua') || tipo.includes('aria acqua')) { if (pnum >= 13 && pnum <= 35) return 0.150; if (pnum > 35) return 0.060; return null; }
+    if (tipo.includes('acqua/aria') || tipo.includes('acqua-aria') || (tipo.includes('acqua') && tipo.includes('aria'))) { if (pnum >= 13 && pnum <= 35) return 0.160; if (pnum > 35) return 0.060; return null; }
+    if (tipo.includes('acqua/acqua') || tipo.includes('acqua-acqua')) { if (pnum >= 13 && pnum <= 35) return 0.160; if (pnum > 35) return 0.060; return null; }
+    if (tipo.includes('salamoia')) { if (pnum >= 13 && pnum <= 35) return 0.160; if (pnum > 35) return 0.060; return null; }
     return null;
 }
 
@@ -1887,9 +2011,10 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     name: 'Tabella pompe di calore',
                     type: 'table',
                     columns: [
-                        { id: 'tipo_pompa', name: 'Tipo di pompa di calore', type: 'select', options: ['aria/aria split/multisplit', 'aria/aria fixed double duct', 'aria/aria VRF/VRV', 'aria/aria rooftop', 'aria/acqua', 'acqua/aria', 'acqua/acqua', 'salamoia/aria', 'salamoia/acqua'] },
+                        { id: 'alimentazione', name: 'Alimentazione', type: 'select', options: ['Elettrica','GAS'], optional: false, help: 'Seleziona il tipo di alimentazione: Elettrica o GAS (default: Elettrica)' },
+                        { id: 'tipo_pompa', name: 'Tipo di pompa di calore', type: 'select', options: getPumpTypeOptions() },
                         { id: 'potenza_nominale', name: 'Potenza termica nominale Prated (kW)', type: 'number', min: 0, step: 0.1 },
-                        { id: 'scop', name: 'SCOP stagionale', type: 'number', min: 2.5, step: 0.01, optional: true },
+                        { id: 'scop', name: 'SCOP/SPER stagionale', type: 'number', step: 0.01, optional: true },
                         { id: 'cop', name: 'COP (solo per fixed double duct)', type: 'number', min: 0, step: 0.01, optional: true },
                         { id: 'eff_stagionale', name: 'Efficienza stagionale (ηs) - valore assoluto', type: 'number', min: 110, step: 1, help: 'Valore assoluto (es. 137). Sempre visibile; non editabile per fixed double duct.' },
                         { id: 'gwp', name: 'Fascia GWP refrigerante', type: 'select', options: ['>150', '<=150'], optional: true, help: 'Seleziona la fascia GWP del refrigerante per le tipologie che la richiedono' }
@@ -1903,21 +2028,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                 const qufTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
 
-                function assignCi(tipoRaw, potenza) {
-                    if (potenza === undefined || potenza === null) return null;
-                    const p = Number(potenza);
-                    const tipo = (tipoRaw || '').toLowerCase();
-
-                    if (tipo.includes('split') || tipo.includes('multisplit')) { if (p <= 12) return 0.070; return null; }
-                    if (tipo.includes('fixed') && tipo.includes('double')) { if (p <= 12) return 0.200; return null; }
-                    if (tipo.includes('vrf') || tipo.includes('vrv')) { if (p >= 13 && p <= 35) return 0.150; if (p > 35) return 0.055; return null; }
-                    if (tipo.includes('rooftop')) { if (p <= 35) return 0.150; if (p > 35) return 0.055; return null; }
-                    if (tipo.includes('aria/acqua') || tipo.includes('aria-acqua') || tipo.includes('aria acqua')) { if (p >= 13 && p <= 35) return 0.150; if (p > 35) return 0.060; return null; }
-                    if (tipo.includes('acqua/aria') || tipo.includes('acqua-aria') || (tipo.includes('acqua') && tipo.includes('aria'))) { if (p >= 13 && p <= 35) return 0.160; if (p > 35) return 0.060; return null; }
-                    if (tipo.includes('acqua/acqua') || tipo.includes('acqua-acqua')) { if (p >= 13 && p <= 35) return 0.160; if (p > 35) return 0.060; return null; }
-                    if (tipo.includes('salamoia')) { if (p >= 13 && p <= 35) return 0.160; if (p > 35) return 0.060; return null; }
-                    return null;
-                }
+                // Use the shared getCanonicalPumpCi helper (defined at module level)
+                // which prefers table-driven values and falls back to legacy heuristics.
 
                 // scop_minimo is derived from the normative table via getScopMinFromTipo()
 
@@ -1930,15 +2042,16 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     const potenza_nominale = Number(row?.potenza_nominale) || 0;
                     const scop = row?.scop !== undefined && row?.scop !== null ? Number(row.scop) : null;
                     const cop = row?.cop !== undefined && row?.cop !== null ? Number(row.cop) : null; // for fixed double duct
+                    const alimentazione = (row?.alimentazione || 'Elettrica');
                     const eff_stagionale = row?.eff_stagionale !== undefined && row?.eff_stagionale !== null ? Number(row.eff_stagionale) : null; // absolute scale 110..149
                     const gwp = row?.gwp || null; // optional: '>150' or '<=150'
                     const zona_climatica = topZona || row?.zona_climatica;
                     if (!potenza_nominale || (!scop && !cop) || !zona_climatica) return;
 
                     // find normative spec for this pump type and gwp band
-                    const spec = getPumpEcodesignSpec(tipo_pompa, gwp) || {};
+                    const spec = getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {};
                     // find seasonal efficiency minimum spec (eta_s_min) when available
-                    const effSpec = getPumpEfficiencyMin(tipo_pompa, gwp) || {};
+                    const effSpec = getPumpEfficiencyMin(tipo_pompa, gwp, alimentazione, (typeof potenza_nominale === 'number') ? potenza_nominale : (Number(potenza_nominale) || undefined)) || {};
                     // determine which metric to use (scop or cop)
                     let userValue = null;
                     let minValue = null;
@@ -1987,7 +2100,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         const isFixedDouble = tipoLower.includes('fixed') && tipoLower.includes('double');
                         if (isFixedDouble) {
                             // Ensure we pick COP minimum from normative spec (respects GWP band)
-                            const copMinSpec = (typeof getPumpEcodesignSpec === 'function') ? (getPumpEcodesignSpec(tipo_pompa, gwp) || {}).cop : (spec.cop || null);
+                            const copMinSpec = (typeof getPumpEcodesignSpec === 'function') ? (getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {}).cop : (spec.cop || null);
                             const copMin = (copMinSpec === undefined || copMinSpec === null) ? minValue : Number(copMinSpec);
                             if (userValue !== null && userValue !== undefined && copMin > 0) {
                                 kp = Number(userValue) / Number(copMin);
@@ -2003,7 +2116,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         kp = (minValue && minValue > 0 && userValue) ? (Number(userValue) / Number(minValue)) : 1;
                     }
                     const ei = qu * (1 - 1/(scop||userValue)) * kp; // use scop for the 1-1/SCOP factor when available, else best-effort with userValue
-                    const ci = assignCi(tipo_pompa, potenza_nominale);
+                    // Prefer canonical table lookup; pass gwp and alimentazione where available
+                    const ci = getCanonicalPumpCi(tipo_pompa, gwp, alimentazione, potenza_nominale);
                     const incentivo_annuo = ci !== null ? ci * ei : 0;
                     // Durata dell'incentivo basata sulla potenza della singola pompa:
                     // se potenza > 35 kW → 5 anni, altrimenti 2 anni
@@ -2047,10 +2161,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         return;
                     }
 
+                    const alimentazione = (row?.alimentazione || 'Elettrica');
                     // retrieve normative spec
-                    const spec = getPumpEcodesignSpec(tipo_pompa, gwp) || {};
-                    const effSpec = getPumpEfficiencyMin(tipo_pompa, gwp) || {};
-                    let metric = spec.cop ? 'COP' : 'SCOP';
+                    const spec = getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {};
+                    const effSpec = getPumpEfficiencyMin(tipo_pompa, gwp, alimentazione, (typeof Pr === 'number') ? Pr : (Number(Pr) || undefined)) || {};
+                    let metric = spec.cop ? 'COP' : 'SCOP/SPER';
                     let userValue = metric === 'COP' ? cop : scop;
                     let minValue = metric === 'COP' ? spec.cop : spec.scop;
                     if (minValue === undefined || minValue === null) minValue = 1;
@@ -2075,22 +2190,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     const oneMinusInvScop = 1 - 1/(scop||userValue);
                     const EI = Qu * oneMinusInvScop * kp;
 
-                    const assignCiLocal = (tipoRaw, potenza) => {
-                        if (potenza === undefined || potenza === null) return null;
-                        const p = Number(potenza);
-                        const tipo = (tipoRaw || '').toLowerCase();
-                        if (tipo.includes('split') || tipo.includes('multisplit')) { if (p <= 12) return 0.070; return null; }
-                        if (tipo.includes('fixed') && tipo.includes('double')) { if (p <= 12) return 0.200; return null; }
-                        if (tipo.includes('vrf') || tipo.includes('vrv')) { if (p >= 13 && p <= 35) return 0.150; if (p > 35) return 0.055; return null; }
-                        if (tipo.includes('rooftop')) { if (p <= 35) return 0.150; if (p > 35) return 0.055; return null; }
-                        if (tipo.includes('aria/acqua') || tipo.includes('aria-acqua') || tipo.includes('aria acqua')) { if (p >= 13 && p <= 35) return 0.150; if (p > 35) return 0.060; return null; }
-                        if (tipo.includes('acqua/aria') || tipo.includes('acqua-aria') || (tipo.includes('acqua') && tipo.includes('aria'))) { if (p >= 13 && p <= 35) return 0.160; if (p > 35) return 0.060; return null; }
-                        if (tipo.includes('acqua/acqua') || tipo.includes('acqua-acqua')) { if (p >= 13 && p <= 35) return 0.160; if (p > 35) return 0.060; return null; }
-                        if (tipo.includes('salamoia')) { if (p >= 13 && p <= 35) return 0.160; if (p > 35) return 0.060; return null; }
-                        return null;
-                    };
-
-                    const Ci = assignCiLocal(tipo_pompa, Pr);
+                    // Use the shared assignCi helper which prefers the canonical table
+                    const Ci = getCanonicalPumpCi(tipo_pompa, gwp, alimentazione, Pr);
                     const Ia_annuo = Ci !== null ? Ci * EI : 0;
                     // Durata per riga basata sulla potenza (Pr): >35 kW → 5 anni, altrimenti 2
                     const durata = (Pr > 35) ? 5 : 2;
@@ -2112,7 +2213,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         const tipoLower = String(tipo_pompa || '').toLowerCase();
                         const isFixedDouble = tipoLower.includes('fixed') && tipoLower.includes('double');
                         if (isFixedDouble) {
-                            const copMinSpec = (typeof getPumpEcodesignSpec === 'function') ? (getPumpEcodesignSpec(tipo_pompa, gwp) || {}).cop : (spec.cop || minValue);
+                            const copMinSpec = (typeof getPumpEcodesignSpec === 'function') ? (getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {}).cop : (spec.cop || minValue);
                             const copMin = (copMinSpec === undefined || copMinSpec === null) ? minValue : Number(copMinSpec);
                             steps.push(`• kp = COP / COP_min = ${calculatorData.formatNumber(userValue,3)} / ${calculatorData.formatNumber(copMin,3)} = ${calculatorData.formatNumber(kp,3)}`);
                         } else if (seasonalMin !== null && eff_stagionale !== null) {
@@ -2188,14 +2289,32 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0, help: 'Necessario per calcolo premialità 100%' },
                 { id: 'tipo_sistema', name: 'Tipo sistema', type: 'select', options: ['Ibrido factory made (Pn ≤35kW)', 'Ibrido factory made (Pn >35kW)', 'Sistema bivalente (Pn ≤35kW)', 'Sistema bivalente (Pn >35kW)'] },
                 { id: 'potenza_pdc', name: 'Potenza termica pompa di calore Prated (kW)', type: 'number', min: 0, step: 0.1 },
-                { id: 'scop', name: 'SCOP pompa di calore', type: 'number', min: 2.5, step: 0.01 },
+                { id: 'scop', name: 'SCOP pompa di calore', type: 'number', step: 0.01 },
                 { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] }
             ],
             calculate: (params, operatorType) => {
                 const { tipo_sistema, potenza_pdc, scop, zona_climatica } = params;
                 if (!potenza_pdc || !scop || !zona_climatica) return 0;
                 // For sistemi ibridi we assume a typical pump type aria/acqua for ecodesign minima
-                const scop_minimo = 2.825; // aria/acqua normative minimum
+                // Obtain the normative minima from the canonical regulatory table.
+                let scop_minimo = null;
+                try {
+                    if (typeof getPumpEcodesignSpec === 'function') {
+                        const spec = getPumpEcodesignSpec('aria/acqua', null, 'Elettrica');
+                        if (spec && typeof spec.scop !== 'undefined') scop_minimo = spec.scop;
+                    }
+                } catch (e) { /* ignore */ }
+                if (scop_minimo === null) {
+                    try {
+                        if (typeof lookupRegulatorySpec === 'function') {
+                            const reg = lookupRegulatorySpec('aria/acqua', null, 'Elettrica');
+                            if (reg) scop_minimo = (typeof reg.scop_min !== 'undefined') ? reg.scop_min : (typeof reg.sper_min !== 'undefined' ? reg.sper_min : null);
+                        }
+                    } catch (e) { /* ignore */ }
+                }
+                // If we can't determine a normative minimum from the table, consider the
+                // system not eligible (no fallback to legacy constants allowed).
+                if (!scop_minimo) return 0;
                 
                 // Formula: Ia_tot = k × Ei × Ci
                 // dove Ei = Qu × [1 - 1/SCOP] × kp
@@ -2221,8 +2340,16 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     k = tipo_sistema.includes('>35kW') ? 1.1 : 1.0; // Bivalente
                 }
                 
-                // Ci (assumiamo aria/acqua come tipo più comune per sistemi ibridi)
-                const ci = potenza_pdc <= 35 ? 0.150 : 0.060;
+                // Prefer canonical Ci for an assumed 'aria/acqua' pump type; fall back to legacy values
+                let ci = null;
+                try {
+                    ci = getPumpCi('aria/acqua', null, 'Elettrica', potenza_pdc);
+                } catch (e) {
+                    ci = null;
+                }
+                if (ci === null || typeof ci === 'undefined') {
+                    ci = (potenza_pdc <= 35) ? 0.150 : 0.060;
+                }
                 
                 // Incentivo annuo
                 const incentivo_annuo = k * ei * ci;
@@ -2240,7 +2367,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const kp=(scop||0)/(scop_minimo||1);
                 const EI = Qu * (1 - 1/(scop||1)) * kp;
                 let k; if (tipo_sistema?.includes('factory made')) k=1.25; else k = tipo_sistema?.includes('>35kW')?1.1:1.0;
-                const Ci = Pr<=35?0.150:0.060; const Ia_annuo = k * EI * Ci; const durata= operatorType==='pa'?5:2; const tot=Ia_annuo*durata;
+                // prefer canonical table lookup for aria/acqua; fallback to legacy if absent
+                let Ci = null;
+                try { Ci = getPumpCi('aria/acqua', null, 'Elettrica', Pr); } catch(e) { Ci = null; }
+                if (Ci === null || typeof Ci === 'undefined') Ci = (Pr <= 35) ? 0.150 : 0.060;
+                const Ia_annuo = k * EI * Ci; const durata= operatorType==='pa'?5:2; const tot=Ia_annuo*durata;
                 return { result: tot, formula:`Ia_tot = k × EI × Ci × durata; EI = Qu × (1 - 1/SCOP) × kp; Qu = Prated × Quf`, variables:{k,Ei:EI,Qu,Prated:Pr,Quf,Ci,SCOP:scop||0,scop_minimo,kp,durata} };
             }
         },

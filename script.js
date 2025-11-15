@@ -34,17 +34,10 @@ async function initCalculator() {
     // Users must enter SCOP/SCOP_min manually; validation and power constraints remain active.
 
     // Normative SCOP minima per tipologia pompa (tabella ecodesign)
-    const PUMP_SCOP_MIN = {
-        'aria/aria split/multisplit': 3.8,
-        'aria/aria fixed double duct': 3.42,
-        'aria/aria vrf/vrv': 3.5,
-        'aria/aria rooftop': 3.2,
-        'acqua/aria': 3.625,
-        'aria/acqua': 2.825,
-        'acqua/acqua': 3.325,
-        'salamoia/aria': 3.2,
-        'salamoia/acqua': 3.325
-    };
+        const PUMP_SCOP_MIN = {}; // Legacy in-file maps have been removed to ensure a single source of truth.
+        // Normative SCOP minima are obtained from the canonical regulatory table
+        // (via getPumpEcodesignSpec / lookupRegulatorySpec). Legacy in-file maps
+        // have been removed to ensure a single source of truth.
 
     function canonicalKey(s) {
         return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
@@ -78,12 +71,16 @@ async function initCalculator() {
             const gwpEl = tr.querySelector('[data-column-id="gwp"]');
             const gwpVal = gwpEl ? (gwpEl.value || '') : null;
             const tipoVal = String(tipoEl ? (tipoEl.value || '') : '').trim();
+            const alimentazioneEl = tr.querySelector('[data-column-id="alimentazione"]');
+            const alimentazioneVal = alimentazioneEl ? (alimentazioneEl.value || 'Elettrica') : 'Elettrica';
 
             // attempt to reuse ecodesign helper from data.js and obtain separate minima for SCOP and COP
+            // Prefer the canonical regulatory table via getPumpEcodesignSpec/lookupRegulatorySpec.
+            // Only use the legacy in-file PUMP_SCOP_MIN fallback for Elettrica when no table match exists.
             let scopMin = null;
             let copMin = null;
             try {
-                const spec = typeof getPumpEcodesignSpec === 'function' ? getPumpEcodesignSpec(tipoVal, gwpVal) : null;
+                const spec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipoVal, gwpVal, alimentazioneVal) : null;
                 if (spec) {
                     if (typeof spec.scop !== 'undefined') scopMin = spec.scop;
                     if (typeof spec.cop !== 'undefined') copMin = spec.cop;
@@ -91,6 +88,26 @@ async function initCalculator() {
             } catch (e) {
                 console.warn('getPumpEcodesignSpec not available', e);
             }
+
+            // If the ecodesign helper didn't return a spec, try a direct regulatory lookup
+            // (this covers cases where the helper isn't exposed but the canonical table exists).
+            if ((scopMin === null || scopMin === undefined) && (copMin === null || copMin === undefined)) {
+                try {
+                    if (typeof lookupRegulatorySpec === 'function') {
+                        const reg = lookupRegulatorySpec(tipoVal, gwpVal, alimentazioneVal);
+                        if (reg) {
+                            if (typeof reg.scop_min !== 'undefined') scopMin = reg.scop_min;
+                            else if (typeof reg.sper_min !== 'undefined') scopMin = reg.sper_min;
+                            if (typeof reg.cop_min !== 'undefined') copMin = reg.cop_min;
+                        }
+                    }
+                } catch (e) {
+                    // ignore and fall back to legacy mapping below
+                }
+            }
+
+            // No legacy fallback: rely exclusively on the canonical regulatory table
+            // (getPumpEcodesignSpec / lookupRegulatorySpec) for minima.
 
             if (scopMin !== null && scopMin !== undefined) {
                 scopInput.setAttribute('min', String(scopMin));
@@ -183,13 +200,18 @@ async function initCalculator() {
             } catch (e) { /* ignore */ }
             const tipoEl = tr.querySelector('[data-column-id="tipo_pompa"]');
             const gwpEl = tr.querySelector('[data-column-id="gwp"]');
+            const potEl = tr.querySelector('[data-column-id="potenza_nominale"]');
+            const alimentazioneEl = tr.querySelector('[data-column-id="alimentazione"]');
             const gwpVal = gwpEl ? (gwpEl.value || '') : null;
             const tipoVal = String(tipoEl ? (tipoEl.value || '') : '').trim();
+            const alimentazioneVal = alimentazioneEl ? (alimentazioneEl.value || 'Elettrica') : 'Elettrica';
+            const potValRaw = potEl ? String(potEl.value || '').replace(',', '.').trim() : '';
+            const potVal = potValRaw === '' ? undefined : (isNaN(Number(potValRaw)) ? undefined : Number(potValRaw));
 
-            // attempt to reuse efficiency helper from data.js
+            // attempt to reuse efficiency helper from data.js (pass nominal power for strong matching)
             let mapped = null;
             try {
-                const spec = typeof getPumpEfficiencyMin === 'function' ? getPumpEfficiencyMin(tipoVal, gwpVal) : null;
+                const spec = typeof getPumpEfficiencyMin === 'function' ? getPumpEfficiencyMin(tipoVal, gwpVal, alimentazioneVal, potVal) : null;
                 if (spec && typeof spec.eta_s_min !== 'undefined') mapped = spec.eta_s_min;
             } catch (e) {
                 console.warn('getPumpEfficiencyMin not available', e);
@@ -354,6 +376,66 @@ async function initCalculator() {
                 const defaultValue = cellInput.options?.[0]?.value ?? '';
                 cellInput.value = defaultValue;
                 state.inputValues[interventionId][inputId][rowIndex][col.id] = defaultValue;
+
+                // If this is the tipo_pompa select, store the full original options list
+                // so we can rebuild it later when alimentazione changes.
+                if (col.id === 'tipo_pompa') {
+                    try {
+                        const all = Array.from(cellInput.options).map(o => ({ value: o.value, label: o.textContent }));
+                        cellInput.dataset.allOptions = JSON.stringify(all);
+                        // If a helper exists in data.js, filter options according to alimentazione
+                        const alimentazioneElTmp = tr.querySelector('[data-column-id="alimentazione"]');
+                        const alimentazioneValTmp = alimentazioneElTmp ? (alimentazioneElTmp.value || 'Elettrica') : 'Elettrica';
+                        if (typeof getPumpTypesForAlimentazione === 'function') {
+                            const allowed = getPumpTypesForAlimentazione(alimentazioneValTmp) || null;
+                            if (Array.isArray(allowed)) {
+                                Array.from(cellInput.options).forEach(opt => {
+                                    if (!allowed.includes(opt.value)) {
+                                        try { opt.remove(); } catch (e) { /* ignore */ }
+                                    }
+                                });
+                                // ensure selected value is allowed
+                                if (![...cellInput.options].some(o => o.value === cellInput.value)) {
+                                    const newVal = cellInput.options?.[0]?.value || '';
+                                    cellInput.value = newVal;
+                                    state.inputValues[interventionId][inputId][rowIndex][col.id] = newVal;
+                                }
+                            }
+                        }
+                    } catch (e) { /* ignore */ }
+                }
+
+                // If this is the alimentazione select, attach a listener to update tipo_pompa options
+                if (col.id === 'alimentazione') {
+                    cellInput.addEventListener('change', (e) => {
+                        try {
+                            const trRow = tr;
+                            const tipoSel = trRow ? trRow.querySelector('[data-column-id="tipo_pompa"]') : null;
+                            if (!tipoSel) return;
+                            const allOpts = tipoSel.dataset && tipoSel.dataset.allOptions ? JSON.parse(tipoSel.dataset.allOptions || '[]') : null;
+                            const allowed = typeof getPumpTypesForAlimentazione === 'function' ? getPumpTypesForAlimentazione(e.target.value || 'Elettrica') : null;
+                            // Rebuild options from allOpts filtered by allowed (if provided)
+                            if (Array.isArray(allOpts)) {
+                                tipoSel.innerHTML = '';
+                                const toAdd = allOpts.filter(o => !Array.isArray(allowed) || allowed.includes(o.value));
+                                toAdd.forEach(o => {
+                                    const op = document.createElement('option');
+                                    op.value = o.value; op.textContent = o.label;
+                                    tipoSel.appendChild(op);
+                                });
+                                // set state and trigger dependent updates
+                                const newVal = tipoSel.options?.[0]?.value || '';
+                                tipoSel.value = newVal;
+                                const r = parseInt(trRow.dataset.rowIndex || '0');
+                                state.inputValues[interventionId][inputId][r]['tipo_pompa'] = newVal;
+                                // re-run per-row toggles and constraints
+                                applyScopMinConstraintForRow(trRow);
+                                applyEffStagMinConstraintForRow(trRow);
+                                try { validateRequiredFields(); } catch (e) {}
+                            }
+                        } catch (e) { console.warn('alimentazione change handler error', e); }
+                    });
+                }
             }
             
             // Event listener per aggiornare lo stato e i campi computed
@@ -454,6 +536,8 @@ async function initCalculator() {
                     function toggleFieldsByTipo() {
                         const tipoVal = tipoEl ? String(tipoEl.value || '') : '';
                         const lower = tipoVal.toLowerCase();
+                        const alimentazioneElRow = trEl.querySelector('[data-column-id="alimentazione"]');
+                        const alimentazioneValRow = alimentazioneElRow ? String(alimentazioneElRow.value || '').toLowerCase() : 'elettrica';
                         // show gwp/ cop flags via shared helper to centralize logic
                         let needsGwp = false; let needsCop = false;
                         try {
@@ -488,56 +572,90 @@ async function initCalculator() {
                         }
 
                         // needsCop already determined above
-                        if (copEl) {
-                            if (needsCop) {
-                                copEl.disabled = false;
-                                copEl.removeAttribute('aria-hidden');
-                                copEl.required = true;
-                                copEl.classList.remove('disabled-input');
-                            } else {
+                        // If alimentation is GAS, require SCOP/SPER and seasonal efficiency and disable COP/GWP
+                        if (alimentazioneValRow === 'gas') {
+                            if (copEl) {
                                 copEl.disabled = true;
                                 copEl.setAttribute('aria-hidden', 'true');
                                 copEl.required = false;
                                 copEl.classList.add('disabled-input');
-                                // clear any inline invalid styling when disabling
                                 copEl.classList.remove('invalid');
                                 try { copEl.setCustomValidity(''); } catch (e) {}
+                                try { copEl.value = ''; } catch (e) {}
                             }
-                        }
-
-                        // SCOP: disable for fixed double duct (COP used instead), require for others
-                        if (scopEl) {
-                            if (needsCop) {
-                                scopEl.disabled = true;
-                                scopEl.setAttribute('aria-hidden', 'true');
-                                scopEl.required = false;
-                                scopEl.classList.add('disabled-input');
-                                try { scopEl.setCustomValidity(''); } catch (e) {}
-                                scopEl.classList.remove('invalid');
-                            } else {
+                            if (scopEl) {
                                 scopEl.disabled = false;
                                 scopEl.removeAttribute('aria-hidden');
                                 scopEl.required = true;
                                 scopEl.classList.remove('disabled-input');
                             }
-                        }
-
-                        // Efficienza stagionale: disable for fixed double duct (COP used instead), require for others
-                        if (effEl) {
-                            if (needsCop) {
-                                effEl.disabled = true;
-                                effEl.setAttribute('aria-hidden', 'true');
-                                effEl.required = false;
-                                effEl.classList.add('disabled-input');
-                                // clear any inline invalid styling when disabling
-                                effEl.classList.remove('invalid');
-                                try { effEl.setCustomValidity(''); } catch (e) {}
-                                try { effEl.value = ''; } catch (e) {}
-                            } else {
+                            if (effEl) {
                                 effEl.disabled = false;
                                 effEl.removeAttribute('aria-hidden');
                                 effEl.required = true;
                                 effEl.classList.remove('disabled-input');
+                            }
+                            if (gwpEl) {
+                                gwpEl.disabled = true;
+                                gwpEl.setAttribute('aria-hidden', 'true');
+                                gwpEl.required = false;
+                                gwpEl.classList.add('disabled-input');
+                                gwpEl.classList.remove('invalid');
+                                try { gwpEl.setCustomValidity(''); } catch (e) {}
+                                try { gwpEl.value = ''; } catch (e) {}
+                            }
+                        } else {
+                            if (copEl) {
+                                if (needsCop) {
+                                    copEl.disabled = false;
+                                    copEl.removeAttribute('aria-hidden');
+                                    copEl.required = true;
+                                    copEl.classList.remove('disabled-input');
+                                } else {
+                                    copEl.disabled = true;
+                                    copEl.setAttribute('aria-hidden', 'true');
+                                    copEl.required = false;
+                                    copEl.classList.add('disabled-input');
+                                    copEl.classList.remove('invalid');
+                                    try { copEl.setCustomValidity(''); } catch (e) {}
+                                    try { copEl.value = ''; } catch (e) {}
+                                }
+                            }
+
+                            // SCOP: disable for fixed double duct (COP used instead), require for others
+                            if (scopEl) {
+                                if (needsCop) {
+                                    scopEl.disabled = true;
+                                    scopEl.setAttribute('aria-hidden', 'true');
+                                    scopEl.required = false;
+                                    scopEl.classList.add('disabled-input');
+                                    try { scopEl.setCustomValidity(''); } catch (e) {}
+                                    scopEl.classList.remove('invalid');
+                                } else {
+                                    scopEl.disabled = false;
+                                    scopEl.removeAttribute('aria-hidden');
+                                    scopEl.required = true;
+                                    scopEl.classList.remove('disabled-input');
+                                }
+                            }
+
+                            // Efficienza stagionale: disable for fixed double duct (COP used instead), require for others
+                            if (effEl) {
+                                if (needsCop) {
+                                    effEl.disabled = true;
+                                    effEl.setAttribute('aria-hidden', 'true');
+                                    effEl.required = false;
+                                    effEl.classList.add('disabled-input');
+                                    // clear any inline invalid styling when disabling
+                                    effEl.classList.remove('invalid');
+                                    try { effEl.setCustomValidity(''); } catch (e) {}
+                                    try { effEl.value = ''; } catch (e) {}
+                                } else {
+                                    effEl.disabled = false;
+                                    effEl.removeAttribute('aria-hidden');
+                                    effEl.required = true;
+                                    effEl.classList.remove('disabled-input');
+                                }
                             }
                         }
 
@@ -2367,6 +2485,8 @@ async function initCalculator() {
 
                     function toggleFieldsByTipoRow() {
                         const tipoVal = (tipoSel.value || '').toString().toLowerCase();
+                        const alimentazioneEl = tr.querySelector('[data-column-id="alimentazione"]');
+                        const alimentazioneVal = alimentazioneEl ? (String(alimentazioneEl.value || '').toLowerCase()) : 'elettrica';
                         // Determine flags via shared helper (keeps logic DRY and testable)
                         let needsCop = false; let needsGwp = false;
                         try {
@@ -2384,13 +2504,9 @@ async function initCalculator() {
                             needsGwp = tipoVal.includes('split') || tipoVal.includes('multisplit') || (tipoVal.includes('salamoia') && tipoVal.includes('aria')) || (tipoVal.includes('fixed') && tipoVal.includes('double'));
                         }
 
-                        if (copEl) {
-                            if (needsCop) {
-                                copEl.disabled = false;
-                                copEl.removeAttribute('aria-hidden');
-                                copEl.required = true;
-                                copEl.classList.remove('disabled-input');
-                            } else {
+                        // If alimentation is GAS, enforce SCOP/SPER and seasonal efficiency as required and disable COP
+                        if (alimentazioneVal === 'gas') {
+                            if (copEl) {
                                 copEl.disabled = true;
                                 copEl.setAttribute('aria-hidden', 'true');
                                 copEl.required = false;
@@ -2399,32 +2515,14 @@ async function initCalculator() {
                                 try { copEl.setCustomValidity(''); } catch (e) {}
                                 try { copEl.value = ''; } catch (e) {}
                             }
-                        }
-
-                        if (scopEl) {
-                            if (needsCop) {
-                                scopEl.disabled = true;
-                                scopEl.setAttribute('aria-hidden', 'true');
-                                scopEl.required = false;
-                                scopEl.classList.add('disabled-input');
-                                scopEl.classList.remove('invalid');
-                                try { scopEl.setCustomValidity(''); } catch (e) {}
-                                try { scopEl.value = ''; } catch (e) {}
-                            } else {
+                            if (scopEl) {
                                 scopEl.disabled = false;
                                 scopEl.removeAttribute('aria-hidden');
                                 scopEl.required = true;
                                 scopEl.classList.remove('disabled-input');
                             }
-                        }
-
-                        if (gwpEl) {
-                            if (needsGwp) {
-                                gwpEl.disabled = false;
-                                gwpEl.removeAttribute('aria-hidden');
-                                gwpEl.required = true;
-                                gwpEl.classList.remove('disabled-input');
-                            } else {
+                            if (gwpEl) {
+                                // GWP is not relevant for GAS alimentazione in most rules; keep disabled
                                 gwpEl.disabled = true;
                                 gwpEl.setAttribute('aria-hidden', 'true');
                                 gwpEl.required = false;
@@ -2432,6 +2530,57 @@ async function initCalculator() {
                                 gwpEl.classList.remove('invalid');
                                 try { gwpEl.setCustomValidity(''); } catch (e) {}
                                 try { gwpEl.value = ''; } catch (e) {}
+                            }
+                        } else {
+                            if (copEl) {
+                                if (needsCop) {
+                                    copEl.disabled = false;
+                                    copEl.removeAttribute('aria-hidden');
+                                    copEl.required = true;
+                                    copEl.classList.remove('disabled-input');
+                                } else {
+                                    copEl.disabled = true;
+                                    copEl.setAttribute('aria-hidden', 'true');
+                                    copEl.required = false;
+                                    copEl.classList.add('disabled-input');
+                                    copEl.classList.remove('invalid');
+                                    try { copEl.setCustomValidity(''); } catch (e) {}
+                                    try { copEl.value = ''; } catch (e) {}
+                                }
+                            }
+
+                            if (scopEl) {
+                                if (needsCop) {
+                                    scopEl.disabled = true;
+                                    scopEl.setAttribute('aria-hidden', 'true');
+                                    scopEl.required = false;
+                                    scopEl.classList.add('disabled-input');
+                                    scopEl.classList.remove('invalid');
+                                    try { scopEl.setCustomValidity(''); } catch (e) {}
+                                    try { scopEl.value = ''; } catch (e) {}
+                                } else {
+                                    scopEl.disabled = false;
+                                    scopEl.removeAttribute('aria-hidden');
+                                    scopEl.required = true;
+                                    scopEl.classList.remove('disabled-input');
+                                }
+                            }
+
+                            if (gwpEl) {
+                                if (needsGwp) {
+                                    gwpEl.disabled = false;
+                                    gwpEl.removeAttribute('aria-hidden');
+                                    gwpEl.required = true;
+                                    gwpEl.classList.remove('disabled-input');
+                                } else {
+                                    gwpEl.disabled = true;
+                                    gwpEl.setAttribute('aria-hidden', 'true');
+                                    gwpEl.required = false;
+                                    gwpEl.classList.add('disabled-input');
+                                    gwpEl.classList.remove('invalid');
+                                    try { gwpEl.setCustomValidity(''); } catch (e) {}
+                                    try { gwpEl.value = ''; } catch (e) {}
+                                }
                             }
                         }
 
@@ -2606,7 +2755,8 @@ async function initCalculator() {
                 // Check against ecodesign minima if available
                 try {
                     const gwpVal = row?.gwp || (tr ? (tr.querySelector('[data-column-id="gwp"]')?.value || null) : null);
-                    const spec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipo, gwpVal) : null;
+                    const alimentazioneVal = row?.alimentazione || (tr ? (tr.querySelector('[data-column-id="alimentazione"]')?.value || 'Elettrica') : 'Elettrica');
+                    const spec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipo, gwpVal, alimentazioneVal) : null;
                     const minScop = spec && spec.scop ? spec.scop : null;
                     if (minScop !== null && typeof minScop !== 'undefined') {
                         if (scopVal < Number(minScop)) {
