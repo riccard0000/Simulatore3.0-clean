@@ -1,6 +1,6 @@
 {
   "name": "simulatore-conto-termico-30",
-  "version": "1.0.0",
+  "version": "1.0.0-pompa-calore-final",
   "description": "Simulatore Conto Termico 3.0 per GSE",
   "scripts": {
     "clean:formulas": "node scripts/remove-formulas.js",
