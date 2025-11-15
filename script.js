@@ -58,30 +58,54 @@ async function initCalculator() {
         try {
             if (!tr) return;
             const scopInput = tr.querySelector('[data-column-id="scop"]');
+            const copInput = tr.querySelector('[data-column-id="cop"]');
             if (!scopInput) return;
+            // If the SCOP input is disabled for this row (e.g. fixed double duct),
+            // clear any previous SCOP error visuals but do NOT early-return —
+            // COP may still be required/validated for fixed double duct rows.
+            try {
+                if (scopInput.disabled) {
+                    scopInput.classList.remove('invalid');
+                    try { scopInput.setCustomValidity(''); } catch (e) {}
+                    const scopErr = scopInput.parentNode ? scopInput.parentNode.querySelector('.field-error') : null;
+                    if (scopErr) { scopErr.textContent = ''; scopErr.style.display = 'none'; }
+                    scopInput.style.borderColor = '';
+                    scopInput.style.backgroundColor = '';
+                    // do not clear COP here; COP validation should run below when applicable
+                }
+            } catch (e) { /* ignore */ }
             const tipoEl = tr.querySelector('[data-column-id="tipo_pompa"]');
             const gwpEl = tr.querySelector('[data-column-id="gwp"]');
             const gwpVal = gwpEl ? (gwpEl.value || '') : null;
             const tipoVal = String(tipoEl ? (tipoEl.value || '') : '').trim();
 
-            // attempt to reuse ecodesign helper from data.js
-            let mapped = null;
+            // attempt to reuse ecodesign helper from data.js and obtain separate minima for SCOP and COP
+            let scopMin = null;
+            let copMin = null;
             try {
                 const spec = typeof getPumpEcodesignSpec === 'function' ? getPumpEcodesignSpec(tipoVal, gwpVal) : null;
-                if (spec) mapped = spec.scop || spec.cop || null;
+                if (spec) {
+                    if (typeof spec.scop !== 'undefined') scopMin = spec.scop;
+                    if (typeof spec.cop !== 'undefined') copMin = spec.cop;
+                }
             } catch (e) {
                 console.warn('getPumpEcodesignSpec not available', e);
             }
 
-            if (mapped !== null && mapped !== undefined) {
-                scopInput.setAttribute('min', String(mapped));
+            if (scopMin !== null && scopMin !== undefined) {
+                scopInput.setAttribute('min', String(scopMin));
             } else {
                 scopInput.removeAttribute('min');
             }
             try { scopInput.setAttribute('step', 'any'); } catch (e) {}
+            if (copInput) {
+                if (copMin !== null && copMin !== undefined) copInput.setAttribute('min', String(copMin)); else copInput.removeAttribute('min');
+                try { copInput.setAttribute('step', 'any'); } catch (e) {}
+            }
 
             // Inline error element lives next to the scop input's td
             const scopErr = scopInput.parentNode ? scopInput.parentNode.querySelector('.field-error') : null;
+            const copErr = copInput && copInput.parentNode ? copInput.parentNode.querySelector('.field-error') : null;
             const raw = String(scopInput.value || '').replace(',', '.').trim();
             const num = raw === '' ? NaN : parseFloat(raw);
             const decPart = (raw.indexOf('.') >= 0) ? raw.split('.')[1] : '';
@@ -89,16 +113,106 @@ async function initCalculator() {
                 scopInput.classList.add('invalid');
                 try { scopInput.setCustomValidity('Inserire al massimo 3 cifre decimali'); } catch (e) {}
                 if (scopErr) { scopErr.textContent = 'Inserire al massimo 3 cifre decimali'; scopErr.style.display = 'block'; }
-            } else if (!isNaN(num) && mapped !== null && mapped !== undefined && num < mapped) {
+                // visual emphasis
+                scopInput.style.borderColor = '#d32f2f'; scopInput.style.backgroundColor = '#ffebee';
+            } else if ((raw === '' || raw === null) && scopInput.required && !scopInput.disabled) {
+                // Empty but required
                 scopInput.classList.add('invalid');
-                try { scopInput.setCustomValidity(`Valore SCOP minimo richiesto: ${mapped}`); } catch (e) {}
-                if (scopErr) { scopErr.textContent = `Valore SCOP minimo richiesto: ${mapped}`; scopErr.style.display = 'block'; }
+                try { scopInput.setCustomValidity('Campo obbligatorio'); } catch (e) {}
+                if (scopErr) { scopErr.textContent = 'Campo obbligatorio'; scopErr.style.display = 'block'; }
+                scopInput.style.borderColor = '#d32f2f'; scopInput.style.backgroundColor = '#ffebee';
+            } else if (!isNaN(num) && scopMin !== null && scopMin !== undefined && num < scopMin) {
+                scopInput.classList.add('invalid');
+                try { scopInput.setCustomValidity(`Valore SCOP minimo richiesto: ${scopMin}`); } catch (e) {}
+                if (scopErr) { scopErr.textContent = `Valore SCOP minimo richiesto: ${scopMin}`; scopErr.style.display = 'block'; }
+                scopInput.style.borderColor = '#d32f2f'; scopInput.style.backgroundColor = '#ffebee';
             } else {
                 scopInput.classList.remove('invalid');
                 try { scopInput.setCustomValidity(''); } catch (e) {}
                 if (scopErr) { scopErr.textContent = ''; scopErr.style.display = 'none'; }
+                // remove inline visual emphasis
+                scopInput.style.borderColor = '';
+                scopInput.style.backgroundColor = '';
             }
+            // COP validation (when present and applicable)
+            try {
+                if (copInput) {
+                    const rawCop = String(copInput.value || '').replace(',', '.').trim();
+                    const numCop = rawCop === '' ? NaN : parseFloat(rawCop);
+                    if ((rawCop === '' || rawCop === null) && copInput.required && !copInput.disabled) {
+                        copInput.classList.add('invalid');
+                        try { copInput.setCustomValidity('Campo obbligatorio'); } catch (e) {}
+                        if (copErr) { copErr.textContent = 'Campo obbligatorio'; copErr.style.display = 'block'; }
+                        copInput.style.borderColor = '#d32f2f'; copInput.style.backgroundColor = '#ffebee';
+                    } else if (!isNaN(numCop) && copMin !== null && copMin !== undefined && numCop < copMin) {
+                        copInput.classList.add('invalid');
+                        try { copInput.setCustomValidity(`Valore COP minimo richiesto: ${copMin}`); } catch (e) {}
+                        if (copErr) { copErr.textContent = `Valore COP minimo richiesto: ${copMin}`; copErr.style.display = 'block'; }
+                        copInput.style.borderColor = '#d32f2f'; copInput.style.backgroundColor = '#ffebee';
+                    } else {
+                        copInput.classList.remove('invalid');
+                        try { copInput.setCustomValidity(''); } catch (e) {}
+                        if (copErr) { copErr.textContent = ''; copErr.style.display = 'none'; }
+                        copInput.style.borderColor = '';
+                        copInput.style.backgroundColor = '';
+                    }
+                }
+            } catch (e) { console.warn('COP validation error', e); }
         } catch (e) { console.warn('applyScopMinConstraintForRow error', e); }
+    }
+
+    // Shared helper: apply Efficienza stagionale (ηs) minimum constraint for a given table row.
+    // Ensures no maximum is enforced and displays an inline error when the provided
+    // seasonal efficiency is below the normative minimum (eta_s_min) from data.js.
+    function applyEffStagMinConstraintForRow(tr) {
+        try {
+            if (!tr) return;
+            const effInput = tr.querySelector('[data-column-id="eff_stagionale"]');
+            if (!effInput) return;
+            // If eff_stagionale is disabled for this row (fixed double duct), clear any errors and skip
+            try {
+                if (effInput.disabled) {
+                    effInput.classList.remove('invalid');
+                    try { effInput.setCustomValidity(''); } catch (e) {}
+                    const effErr = effInput.parentNode ? effInput.parentNode.querySelector('.field-error') : null;
+                    if (effErr) { effErr.textContent = ''; effErr.style.display = 'none'; }
+                    effInput.style.borderColor = '';
+                    effInput.style.backgroundColor = '';
+                    return;
+                }
+            } catch (e) { /* ignore */ }
+            const tipoEl = tr.querySelector('[data-column-id="tipo_pompa"]');
+            const gwpEl = tr.querySelector('[data-column-id="gwp"]');
+            const gwpVal = gwpEl ? (gwpEl.value || '') : null;
+            const tipoVal = String(tipoEl ? (tipoEl.value || '') : '').trim();
+
+            // attempt to reuse efficiency helper from data.js
+            let mapped = null;
+            try {
+                const spec = typeof getPumpEfficiencyMin === 'function' ? getPumpEfficiencyMin(tipoVal, gwpVal) : null;
+                if (spec && typeof spec.eta_s_min !== 'undefined') mapped = spec.eta_s_min;
+            } catch (e) {
+                console.warn('getPumpEfficiencyMin not available', e);
+            }
+
+            // We explicitly DO NOT set a max attribute for eff_stagionale (user requested)
+            try { effInput.removeAttribute('max'); } catch (e) {}
+            try { effInput.setAttribute('step', '1'); } catch (e) {}
+
+            const effErr = effInput.parentNode ? effInput.parentNode.querySelector('.field-error') : null;
+            const raw = String(effInput.value || '').replace(',', '.').trim();
+            const num = raw === '' ? NaN : Number(raw);
+
+            if (!isNaN(num) && mapped !== null && mapped !== undefined && num < mapped) {
+                effInput.classList.add('invalid');
+                try { effInput.setCustomValidity(`Valore minimo richiesto: ${mapped}`); } catch (e) {}
+                if (effErr) { effErr.textContent = `Valore minimo richiesto: ${mapped}`; effErr.style.display = 'block'; }
+            } else {
+                effInput.classList.remove('invalid');
+                try { effInput.setCustomValidity(''); } catch (e) {}
+                if (effErr) { effErr.textContent = ''; effErr.style.display = 'none'; }
+            }
+        } catch (e) { console.warn('applyEffStagMinConstraintForRow error', e); }
     }
 
     // --- INIZIALIZZAZIONE ---
@@ -327,6 +441,7 @@ async function initCalculator() {
                     const gwpEl = trEl.querySelector('[data-column-id="gwp"]');
                     const copEl = trEl.querySelector('[data-column-id="cop"]');
                     const scopEl = trEl.querySelector('[data-column-id="scop"]');
+                    const effEl = trEl.querySelector('[data-column-id="eff_stagionale"]');
 
                     // If some dependent cells are not yet present (created later in the loop),
                     // retry shortly. This ensures toggling finds the elements and applies
@@ -339,8 +454,22 @@ async function initCalculator() {
                     function toggleFieldsByTipo() {
                         const tipoVal = tipoEl ? String(tipoEl.value || '') : '';
                         const lower = tipoVal.toLowerCase();
-                        // show gwp for types that depend on refrigerant band
-                        const needsGwp = lower.includes('split') || lower.includes('multisplit') || (lower.includes('salamoia') && lower.includes('aria')) || (lower.includes('fixed') && lower.includes('double'));
+                        // show gwp/ cop flags via shared helper to centralize logic
+                        let needsGwp = false; let needsCop = false;
+                        try {
+                            const utils = (typeof window !== 'undefined' && window.pumpUtils) ? window.pumpUtils : (typeof require === 'function' ? require('./tools/pump-utils.js') : null);
+                            if (utils && typeof utils.detectPumpFlags === 'function') {
+                                const flags = utils.detectPumpFlags(tipoVal);
+                                needsGwp = !!flags.needsGwp;
+                                needsCop = !!flags.needsCop;
+                            } else {
+                                needsGwp = lower.includes('split') || lower.includes('multisplit') || (lower.includes('salamoia') && lower.includes('aria')) || (lower.includes('fixed') && lower.includes('double'));
+                                needsCop = lower.includes('fixed') && lower.includes('double');
+                            }
+                        } catch (e) {
+                            needsGwp = lower.includes('split') || lower.includes('multisplit') || (lower.includes('salamoia') && lower.includes('aria')) || (lower.includes('fixed') && lower.includes('double'));
+                            needsCop = lower.includes('fixed') && lower.includes('double');
+                        }
                         if (gwpEl) {
                             if (needsGwp) {
                                 gwpEl.disabled = false;
@@ -358,8 +487,7 @@ async function initCalculator() {
                             }
                         }
 
-                        // show cop only for fixed double duct
-                        const needsCop = lower.includes('fixed') && lower.includes('double');
+                        // needsCop already determined above
                         if (copEl) {
                             if (needsCop) {
                                 copEl.disabled = false;
@@ -394,24 +522,73 @@ async function initCalculator() {
                             }
                         }
 
-                        // After toggling fields, re-run scop constraint to pick correct minima if gwp changed
+                        // Efficienza stagionale: disable for fixed double duct (COP used instead), require for others
+                        if (effEl) {
+                            if (needsCop) {
+                                effEl.disabled = true;
+                                effEl.setAttribute('aria-hidden', 'true');
+                                effEl.required = false;
+                                effEl.classList.add('disabled-input');
+                                // clear any inline invalid styling when disabling
+                                effEl.classList.remove('invalid');
+                                try { effEl.setCustomValidity(''); } catch (e) {}
+                                try { effEl.value = ''; } catch (e) {}
+                            } else {
+                                effEl.disabled = false;
+                                effEl.removeAttribute('aria-hidden');
+                                effEl.required = true;
+                                effEl.classList.remove('disabled-input');
+                            }
+                        }
+
+                        // After toggling fields, re-run scop/eff constraints to pick correct minima if gwp changed
                         applyScopMinConstraintForRow(trEl);
+                        applyEffStagMinConstraintForRow(trEl);
                     }
 
                     if (tipoEl) {
                         tipoEl.addEventListener('change', toggleFieldsByTipo);
                     }
                     if (gwpEl) {
-                        gwpEl.addEventListener('change', () => applyScopMinConstraintForRow(trEl));
+                        gwpEl.addEventListener('change', () => { applyScopMinConstraintForRow(trEl); applyEffStagMinConstraintForRow(trEl); });
                     }
 
                     // Run initial constraint application synchronously
                     applyScopMinConstraintForRow(trEl);
+                    applyEffStagMinConstraintForRow(trEl);
                     toggleFieldsByTipo();
                 }
 
                 // Start the initializer (it will retry shortly if cells are not yet created)
                 initTipoGwpCopToggle();
+            }
+            // If this column is COP (used for fixed double duct), add inline error placeholder and attach validation
+            if (col.id === 'cop') {
+                const copErr = document.createElement('small');
+                copErr.className = 'field-error';
+                copErr.id = `error-${interventionId}-${inputId}-${rowIndex}-${col.id}`;
+                copErr.style.color = '#d32f2f';
+                copErr.style.display = 'none';
+                copErr.style.marginTop = '4px';
+                td.appendChild(copErr);
+
+                // Attach listener to validate COP when user types
+                cellInput.addEventListener('input', () => applyScopMinConstraintForRow(tr));
+            }
+            // If this column is the seasonal efficiency (eff_stagionale), add inline error placeholder and attach validation
+            if (col.id === 'eff_stagionale') {
+                const effErr = document.createElement('small');
+                effErr.className = 'field-error';
+                effErr.id = `error-${interventionId}-${inputId}-${rowIndex}-${col.id}`;
+                effErr.style.color = '#d32f2f';
+                effErr.style.display = 'none';
+                effErr.style.marginTop = '4px';
+                td.appendChild(effErr);
+
+                // Attach listener to validate against normative minima when user types
+                // Defensive: remove any max attribute that may have been added elsewhere
+                try { cellInput.removeAttribute('max'); } catch (e) {}
+                cellInput.addEventListener('input', () => applyEffStagMinConstraintForRow(tr));
             }
             // Se la colonna è potenza nominale, aggiungi un placeholder per messaggi di errore inline
             if (col.id === 'potenza_nominale') {
@@ -471,8 +648,21 @@ async function initCalculator() {
             const scopElInit = tr.querySelector('[data-column-id="scop"]');
             const gwpElInit = tr.querySelector('[data-column-id="gwp"]');
             const tipoValInit = tipoElInit ? String(tipoElInit.value || '').toLowerCase() : '';
-            const needsCopInit = tipoValInit.includes('fixed') && tipoValInit.includes('double');
-            const needsGwpInit = tipoValInit.includes('split') || tipoValInit.includes('multisplit') || (tipoValInit.includes('salamoia') && tipoValInit.includes('aria')) || (tipoValInit.includes('fixed') && tipoValInit.includes('double'));
+            let needsCopInit = false; let needsGwpInit = false;
+            try {
+                const utilsInit = (typeof window !== 'undefined' && window.pumpUtils) ? window.pumpUtils : (typeof require === 'function' ? require('./tools/pump-utils.js') : null);
+                if (utilsInit && typeof utilsInit.detectPumpFlags === 'function') {
+                    const flagsInit = utilsInit.detectPumpFlags(tipoValInit);
+                    needsCopInit = !!flagsInit.needsCop;
+                    needsGwpInit = !!flagsInit.needsGwp;
+                } else {
+                    needsCopInit = tipoValInit.includes('fixed') && tipoValInit.includes('double');
+                    needsGwpInit = tipoValInit.includes('split') || tipoValInit.includes('multisplit') || (tipoValInit.includes('salamoia') && tipoValInit.includes('aria')) || (tipoValInit.includes('fixed') && tipoValInit.includes('double'));
+                }
+            } catch (e) {
+                needsCopInit = tipoValInit.includes('fixed') && tipoValInit.includes('double');
+                needsGwpInit = tipoValInit.includes('split') || tipoValInit.includes('multisplit') || (tipoValInit.includes('salamoia') && tipoValInit.includes('aria')) || (tipoValInit.includes('fixed') && tipoValInit.includes('double'));
+            }
 
             if (copElInit) {
                 if (!needsCopInit) {
@@ -899,12 +1089,51 @@ async function initCalculator() {
                                     return; // continue to next column
                                 }
 
+                                // Special UI rule: for fixed double duct rows the SCOP and
+                                // eff_stagionale fields must NOT be validated (they are
+                                // disabled and COP is used instead). Some parts of the UI
+                                // may set required=true briefly; defensively skip validation
+                                // when the row type indicates fixed double duct.
+                                try {
+                                    const trForType = tr;
+                                    const tipoElForType = trForType ? trForType.querySelector('[data-column-id="tipo_pompa"]') : null;
+                                    const tipoValForType = tipoElForType ? String(tipoElForType.value || '').toLowerCase() : '';
+                                    let isFixedDouble = false;
+                                    try {
+                                        const utils = (typeof window !== 'undefined' && window.pumpUtils) ? window.pumpUtils : (typeof require === 'function' ? require('./tools/pump-utils.js') : null);
+                                        if (utils && typeof utils.detectPumpFlags === 'function') {
+                                            const f = utils.detectPumpFlags(tipoValForType);
+                                            isFixedDouble = !!f.needsCop;
+                                        } else {
+                                            isFixedDouble = tipoValForType.includes('fixed') && tipoValForType.includes('double');
+                                        }
+                                    } catch (e) {
+                                        isFixedDouble = tipoValForType.includes('fixed') && tipoValForType.includes('double');
+                                    }
+                                    if (isFixedDouble && (col.id === 'eff_stagionale' || col.id === 'scop')) {
+                                        // ensure any previous error visuals are removed
+                                        if (cellEl && cellEl.classList) cellEl.classList.remove('invalid');
+                                        if (cellEl) { cellEl.style.borderColor = ''; cellEl.style.backgroundColor = ''; try { cellEl.setCustomValidity(''); } catch (e) {} }
+                                        const errElIdSkip = `error-${intId}-${input.id}-${rIdx}-${col.id}`;
+                                        const errElSkip = tr ? tr.querySelector(`#${errElIdSkip}`) : null;
+                                        if (errElSkip) { errElSkip.textContent = ''; errElSkip.style.display = 'none'; }
+                                        return;
+                                    }
+                                } catch (e) { /* ignore detection errors and continue validation */ }
+
+                                // If the DOM element explicitly sets required, respect that even
+                                // if the column metadata marks it optional (fixes SCOP behavior).
+                                if (cellEl && cellEl.required) {
+                                    treatOptional = false;
+                                }
+
                                 if (treatOptional && (col.id === 'gwp' || col.id === 'cop')) {
                                     // If the cell exists and is visible and enabled, then it's required
                                     if (cellEl && cellEl.offsetParent !== null && !cellEl.disabled) {
                                         treatOptional = false;
                                     }
                                 }
+
                                 if (treatOptional) return;
 
                                 // Prefer the value shown in the DOM (so deletions are detected immediately)
@@ -962,6 +1191,7 @@ async function initCalculator() {
                                     allValid = false;
                                     missingFields.push(`${intervention.name} — riga ${rIdx + 1}: ${col.name}`);
                                     if (cellEl && cellEl.classList) cellEl.classList.add('invalid');
+                                    if (cellEl) { cellEl.style.borderColor = '#d32f2f'; cellEl.style.backgroundColor = '#ffebee'; }
 
                                     // Mostra messaggio inline se presente
                                     const errElId = `error-${intId}-${input.id}-${rIdx}-${col.id}`;
@@ -972,6 +1202,7 @@ async function initCalculator() {
                                     }
                                 } else {
                                     if (cellEl && cellEl.classList) cellEl.classList.remove('invalid');
+                                    if (cellEl) { cellEl.style.borderColor = ''; cellEl.style.backgroundColor = ''; }
                                     const errElId = `error-${intId}-${input.id}-${rIdx}-${col.id}`;
                                     const errEl = tr ? tr.querySelector(`#${errElId}`) : null;
                                     if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
@@ -2136,8 +2367,22 @@ async function initCalculator() {
 
                     function toggleFieldsByTipoRow() {
                         const tipoVal = (tipoSel.value || '').toString().toLowerCase();
-                        const needsCop = tipoVal.includes('fixed') && tipoVal.includes('double');
-                        const needsGwp = tipoVal.includes('split') || tipoVal.includes('multisplit') || (tipoVal.includes('salamoia') && tipoVal.includes('aria')) || (tipoVal.includes('fixed') && tipoVal.includes('double'));
+                        // Determine flags via shared helper (keeps logic DRY and testable)
+                        let needsCop = false; let needsGwp = false;
+                        try {
+                            const utils = (typeof window !== 'undefined' && window.pumpUtils) ? window.pumpUtils : (typeof require === 'function' ? require('./tools/pump-utils.js') : null);
+                            if (utils && typeof utils.detectPumpFlags === 'function') {
+                                const flags = utils.detectPumpFlags(tipoVal);
+                                needsCop = !!flags.needsCop;
+                                needsGwp = !!flags.needsGwp;
+                            } else {
+                                needsCop = tipoVal.includes('fixed') && tipoVal.includes('double');
+                                needsGwp = tipoVal.includes('split') || tipoVal.includes('multisplit') || (tipoVal.includes('salamoia') && tipoVal.includes('aria')) || (tipoVal.includes('fixed') && tipoVal.includes('double'));
+                            }
+                        } catch (e) {
+                            needsCop = tipoVal.includes('fixed') && tipoVal.includes('double');
+                            needsGwp = tipoVal.includes('split') || tipoVal.includes('multisplit') || (tipoVal.includes('salamoia') && tipoVal.includes('aria')) || (tipoVal.includes('fixed') && tipoVal.includes('double'));
+                        }
 
                         if (copEl) {
                             if (needsCop) {
@@ -2191,13 +2436,13 @@ async function initCalculator() {
                         }
 
                         // re-run scop minima update
-                        applyScopMinConstraintForRow(trEl);
+                        applyScopMinConstraintForRow(tr);
                         validateRequiredFields();
                     }
 
                     tipoSel.addEventListener('change', toggleFieldsByTipoRow);
                     // initial run
-                    toggleFieldsByTipoRow();
+                    try { toggleFieldsByTipoRow(); } catch (e) { console.warn('toggleFieldsByTipoRow initial run error', e); }
                     tipoSel.dataset.toggleAttached = '1';
                 }
             } catch (e) { /* ignore */ }
