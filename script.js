@@ -3220,21 +3220,7 @@ async function initCalculator() {
         detailsHtml += '<li>I limiti di spesa ammissibile devono rispettare i massimali previsti dalla normativa</li>';
         detailsHtml += '</ul>';
 
-        // 4.b Riepilogo premi globali e massimali
-        detailsHtml += '<h4>🎯 Premi Globali e Massimali:</h4>';
-        if (combo.appliedGlobalPremiums && combo.appliedGlobalPremiums.length) {
-            const globalItems = combo.appliedGlobalPremiums.map(p => {
-                const note = p.note ? ` — ${escapeHtml(p.note)}` : '';
-                if (!p.value) return `<li>${escapeHtml(p.name)}${note}</li>`;
-                return `<li>${escapeHtml(p.name)}: <strong>€ ${formatMoney(p.value)}</strong>${note}</li>`;
-            }).join('');
-            detailsHtml += '<ul>' + globalItems + '</ul>';
-        } else {
-            detailsHtml += '<p class="notice">Nessuna premialità globale applicata.</p>';
-        }
-        if (combo.wasCapped) {
-            detailsHtml += `<p class="notice">Tetto massimo per soggetto applicato: totale originario € ${formatMoney(combo.originalTotal)}, totale dopo cap € ${formatMoney(combo.total)}.</p>`;
-        }
+        // Premi Globali e Massimali: sezione rimossa come da richiesta
         
         // 5. Disclaimer legale
         detailsHtml += '<div class="disclaimer">';
