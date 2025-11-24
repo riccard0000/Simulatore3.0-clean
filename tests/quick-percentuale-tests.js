@@ -1,8 +1,9 @@
 const fs = require('fs');
 const vm = require('vm');
 
-// Load the calculator code (src/data.js) into a VM and expose calculatorData
-const code = fs.readFileSync('src/data.js', 'utf8');
+// Load the calculator code (data.js) into a VM and expose calculatorData
+// Note: file lives at repository root as `data.js`.
+const code = fs.readFileSync('data.js', 'utf8');
 const sandbox = { console, window: {}, document: {}, navigator: {}, global: {} };
 vm.createContext(sandbox);
 vm.runInContext(code + '\nresult = typeof calculatorData !== "undefined" ? calculatorData : null;', sandbox);
@@ -29,8 +30,8 @@ tests.push({
 
 // 2. Zone E private -> 50%
 tests.push({
-  desc: 'Zone E private -> 50%',
-  args: { selectedInterventions: [], params: { zona_climatica: 'E' }, operatorType: 'private_tertiary_person', contextData: {}, interventionId: 'any'},
+  desc: 'Zone E private -> 50% (applicato solo a 1.A isolamento-opache)',
+  args: { selectedInterventions: [], params: { zona_climatica: 'E' }, operatorType: 'private_tertiary_person', contextData: {}, interventionId: 'isolamento-opache'},
   expected: { p: 0.50 }
 });
 
@@ -50,8 +51,8 @@ tests.push({
 
 // 5. UE premium adds +10 percentage points (e.g., zone E -> 50% -> 60%)
 tests.push({
-  desc: 'Zone E with prodotti-ue premium -> 60% (cap 100%)',
-  args: { selectedInterventions: [], params: { zona_climatica: 'E', premiums: { 'prodotti-ue': true } }, operatorType: 'private_tertiary_person', contextData: { selectedPremiums: ['prodotti-ue'] }, interventionId: 'any'},
+  desc: 'Zone E with prodotti-ue premium -> 60% (cap 100%) for 1.A isolamento-opache',
+  args: { selectedInterventions: [], params: { zona_climatica: 'E', premiums: { 'prodotti-ue': true } }, operatorType: 'private_tertiary_person', contextData: { selectedPremiums: ['prodotti-ue'] }, interventionId: 'isolamento-opache'},
   expected: { p: 0.60 }
 });
 

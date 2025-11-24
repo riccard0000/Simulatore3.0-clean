@@ -743,10 +743,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
             // Se non impostato da multi-intervento, valutiamo zona climatica e fallback base
             if (p === 0.40) {
-                // Zona climatica E/F => 50%
-                if (zona === 'E' || zona === 'F') {
+                // Zona climatica E/F => 50% ONLY for intervento 1.A (isolamento-opache)
+                // Per tutte le altre tipologie, mantenere il valore base 40%.
+                if ((zona === 'E' || zona === 'F') && interventionId === 'isolamento-opache') {
                     p = 0.50;
-                    pDesc = `50% (zona climatica ${zona})`;
+                    pDesc = `50% (zona climatica ${zona} - applicato a 1.A isolamento-opache)`;
                 } else {
                     // Default: base 40%
                     p = 0.40;
@@ -1015,13 +1016,12 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     help: 'Zona climatica in cui si trova l\'edificio (influisce sulla percentuale di incentivo per zone E ed F)'
                 }
             ],
-            calculate: (params, operatorType, contextData) => {
+            // computeItot: calcolo teorico degli incentivi (Itot) SOMMA senza applicare il massimale di intervento
+            computeItot: (params, operatorType, contextData) => {
                 const { righe_opache, zona_climatica } = params;
-                
-                // Se non ci sono righe o la zona climatica, return 0
+
                 if (!righe_opache || !Array.isArray(righe_opache) || righe_opache.length === 0 || !zona_climatica) return 0;
-                
-                // Mappa delle tipologie e dei loro Cmax
+
                 const tipologieOptions = [
                     { value: 'copertura_esterno', label: 'i. Copertura - Isolamento esterno', cmax: 300 },
                     { value: 'copertura_interno', label: 'i. Copertura - Isolamento interno', cmax: 150 },
@@ -1032,54 +1032,44 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     { value: 'parete_interno', label: 'iii. Parete perimetrale - Isolamento interno', cmax: 100 },
                     { value: 'parete_ventilata', label: 'iii. Parete perimetrale - Parete ventilata', cmax: 250 }
                 ];
-                
-                // Determina la percentuale base
-                const isArt48ter = contextData?.buildingSubcategory && 
-                                  ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
-                
-                // Piccoli comuni < 15.000 abitanti
-                const isPiccoloComune = contextData?.is_comune === true && 
-                                       contextData?.is_edificio_comunale === true &&
-                                       contextData?.is_piccolo_comune === true &&
-                                       contextData?.subjectType === 'pa' &&
-                                       contextData?.implementationMode === 'direct';
-                
-                // Determina la percentuale centralizzata (include eventuale premio UE)
+
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'isolamento-opache');
                 const percentuale = det.p;
-                
-                // Calcola l'incentivo totale sommando tutte le righe
+
                 let incentivoTotale = 0;
-                
                 righe_opache.forEach(riga => {
                     const { tipologia_struttura, superficie, costo_totale } = riga;
-                    
                     if (!tipologia_struttura || !superficie || !costo_totale || superficie <= 0) return;
-                    
-                    // Trova il Cmax per questa tipologia
+
                     const tipologiaData = tipologieOptions.find(t => t.value === tipologia_struttura);
                     const cmax = tipologiaData?.cmax || 300;
-                    
-                    // Calcola costo specifico
+
                     const costo_specifico = costo_totale / superficie;
-                    
-                    // Applica il massimale
                     const costoEffettivo = Math.min(costo_specifico, cmax);
-                    
-                    // Calcola incentivo per questa riga (premio UE già incluso in percentuale quando applicabile)
-                    let incentivoRiga = percentuale * costoEffettivo * superficie;
-                    
+
+                    // Itot uses the effective cost per row (min(C, Cmax)) but DOES NOT apply the overall Imas cap
+                    const incentivoRiga = percentuale * costoEffettivo * superficie;
                     incentivoTotale += incentivoRiga;
-                    
-                    // Log per debug
-                    if (costo_specifico > cmax) {
-                        console.warn(`⚠️  Riga ${tipologiaData?.label}: Costo specifico (${costo_specifico.toFixed(2)} €/m²) supera Cmax (${cmax} €/m²)`);
-                    }
                 });
-                
-                // Tetto massimo Imas = 1.000.000 €
-                const tettoMassimo = 1000000;
-                return Math.min(incentivoTotale, tettoMassimo);
+
+                return incentivoTotale;
+            },
+
+            // getImas: massimale specifico per l'intervento (Imas)
+            getImas: (params, operatorType, contextData) => {
+                // Per 1.A Imas è fissato a 1.000.000 € (regola attuale)
+                return 1000000;
+            },
+
+            // calculate mantiene compatibilità: ritorna il minimo tra Itot e Imas
+            calculate: (params, operatorType, contextData) => {
+                const Itot = (calculatorData && calculatorData.interventions && calculatorData.interventions['isolamento-opache'] && typeof calculatorData.interventions['isolamento-opache'].computeItot === 'function')
+                    ? calculatorData.interventions['isolamento-opache'].computeItot(params, operatorType, contextData)
+                    : 0;
+                const Imas = (calculatorData && calculatorData.interventions && calculatorData.interventions['isolamento-opache'] && typeof calculatorData.interventions['isolamento-opache'].getImas === 'function')
+                    ? calculatorData.interventions['isolamento-opache'].getImas(params, operatorType, contextData)
+                    : 0;
+                return Math.min(Itot, Imas);
             },
             explain: (params, operatorType, contextData) => {
                 const { righe_opache, zona_climatica } = params;
