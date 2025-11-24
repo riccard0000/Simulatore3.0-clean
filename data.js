@@ -3026,6 +3026,43 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 };
             }
             // Altrimenti proseguiamo con la modalità standard
+        
+            // Helper: massimale per soggetto (usato anche per singoli interventi)
+            this.getMassimaleSoggetto = function(opType) {
+                const maxIncentiveByOperator = {
+                    'pa': 5000000, // 5M€ per PA
+                    'private_tertiary_person': 2000000, // 2M€ per privati terziario (non imprese)
+                    'private_tertiary_small': 2000000, // 2M€ per piccole imprese ed ETS economici
+                    'private_tertiary_medium': 2000000, // 2M€ per medie imprese
+                    'private_tertiary_large': 2000000, // 2M€ per grandi imprese
+                    'private_residential': 1000000 // 1M€ per privati residenziale
+                };
+                return maxIncentiveByOperator[opType] || 2000000;
+            };
+
+            // Helper: calcola il risultato dettagliato per un singolo intervento
+            // Restituisce { Itot, Imas, MassimaleSoggetto, finale }
+            this.computeFinalForIntervention = function(interventionId, params, opType, ctx) {
+                const intervention = this.interventions && this.interventions[interventionId];
+                if (!intervention) return { Itot: 0, Imas: 0, MassimaleSoggetto: this.getMassimaleSoggetto(opType), finale: 0 };
+
+                // Itot: preferisci computeItot se disponibile, altrimenti tenta calculate (attenzione: calculate potrebbe già applicare Imas)
+                let Itot = 0;
+                if (typeof intervention.computeItot === 'function') {
+                    Itot = intervention.computeItot(params, opType, ctx);
+                } else if (typeof intervention.calculate === 'function') {
+                    // In assenza di computeItot usiamo calculate come fallback (potrebbe applicare Imas già)
+                    Itot = intervention.calculate(params, opType, ctx);
+                }
+
+                // Imas: preferisci getImas se disponibile, altrimenti considerala infinita (nessun cap a livello intervento)
+                let Imas = (typeof intervention.getImas === 'function') ? intervention.getImas(params, opType, ctx) : Number.POSITIVE_INFINITY;
+
+                const MassimaleSoggetto = this.getMassimaleSoggetto(opType);
+
+                const finale = Math.min(Itot, Imas, MassimaleSoggetto);
+                return { Itot, Imas, MassimaleSoggetto, finale };
+            };
         }
 
         // MODALITÀ STANDARD (senza incentivo al 100%)
