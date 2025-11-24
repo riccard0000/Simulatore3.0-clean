@@ -653,52 +653,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             return { p, pDesc };
         }
 
-        if (companyTypes.includes(operatorType) && isCategory1) {
-            // Base percentages per company size
-            const baseMap = {
-                'private_tertiary_small': 0.45,
-                'private_tertiary_medium': 0.35,
-                'private_tertiary_large': 0.25
-            };
-            p = baseMap[operatorType] || 0.25;
-            pDesc = `${Math.round(p*100)}% (base per imprese)`;
-
-            // If more than one intervention from Category 1 selected, +5 percentage points
-            const selectedCat1Count = sel.filter(id => this.interventions[id] && (this.interventions[id].name || '').toString().trim().startsWith('1.')).length;
-            if (selectedCat1Count > 1) {
-                p = +(p + 0.05).toFixed(2);
-                pDesc = `${Math.round(p*100)}% (+5pp per multi-intervento categoria 1)`;
-            }
-
-            // Apply incremental flags (only when selectable for imprese): INCREMENTO INT3/INT4/INT5
-            // Flags names expected: 'INCREMENTO_INT3', 'INCREMENTO_INT4', 'INCREMENTO_INT5'
-            const inc3 = hasFlag('INCREMENTO_INT3');
-            const inc4 = hasFlag('INCREMENTO_INT4');
-            const inc5 = hasFlag('INCREMENTO_INT5');
-
-            // First two flags are exclusive: if both present, take the larger (15pp over 5pp)
-            let add = 0;
-            if (inc3 || inc4) {
-                add += (inc3 ? 0.15 : 0) + (inc4 ? 0.05 : 0);
-                // enforce exclusivity: if both present, prefer the larger (keep 0.15)
-                if (inc3 && inc4) add = 0.15;
-            }
-            if (inc5) add += 0.15;
-
-            if (add > 0) {
-                p = +(p + add).toFixed(2);
-                pDesc = `${Math.round(p*100)}% (inclusi incrementi)`;
-            }
-
-            // Cap a 65% per regola generale per le imprese
-            if (p > 0.65) {
-                p = 0.65;
-                // Aggiorna la descrizione per riflettere il limite massimo applicato
-                pDesc = `${Math.round(p*100)}% (massimo applicabile per imprese)`;
-            }
-
-            return { p, pDesc };
-        }
+        // Note: removed historic special-case that changed `p` based on `operatorType` for companies
+        // for Category 1. The percentuale incentivabile `p` is determined by intervention rules
+        // (zone climatiche, Art.48-ter, premi UE, and multi-intervento tipo A for 1.A/1.B) and
+        // MUST NOT be derived from the subject type. MassimaleSoggetto is computed separately
+        // via `getMassimaleSoggetto(...)` as PercentualeMassimaleSoggetto × CostoAmmissibile.
 
         // Special-case per 1.G: infrastrutture di ricarica -> base 30% (normativa Art.5.1.g)
         if (interventionId === 'infrastrutture-ricarica') {
@@ -727,17 +686,23 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             p = 1.0;
             pDesc = '100% (Comune < 15.000 abitanti)';
         } else {
-            // Multi-intervento: regole per 1.A e 1.B
+            // Multi-intervento (tipo A): regole precise per l'aumento della percentuale p
+            // - La maggiorazione al valore di `p` (da 40% -> 55%) si applica al SOLO intervento 1.A
+            //   quando è presente almeno uno degli interventi di Titolo III (2.A/2.B/2.C/2.E).
+            // - L'intervento 1.B riceve la stessa maggiorazione 55% SOLTANTO se sono soddisfatte entrambe
+            //   le condizioni: (a) è presente l'intervento 1.A e (b) è presente almeno uno degli interventi di Titolo III.
+            //   In questo caso la maggiorazione viene applicata sia a 1.A che a 1.B.
             if (interventionId === 'isolamento-opache') {
+                // Applichiamo 55% a 1.A se esiste almeno un Titolo III selezionato (indipendentemente dalla presenza di 1.B)
                 if (hasTitoloIII && has1A) {
                     p = 0.55;
                     pDesc = '55% (multi-intervento 1.A + 2.A/2.B/2.C/2.E)';
                 }
             } else if (interventionId === 'sostituzione-infissi') {
-                // 1.B: 55% solo se multi-intervento è stato applicato al 1.A (cioè esiste 1.A + almeno uno dei Titolo III)
+                // Applichiamo 55% a 1.B solo se 1.A è presente E c'è almeno un Titolo III
                 if (has1A && hasTitoloIII) {
                     p = 0.55;
-                    pDesc = '55% (multi-intervento su 1.A, applicato anche a 1.B)';
+                    pDesc = '55% (1.B applica la maggiorazione solo se 1.A + Titolo III sono presenti)';
                 }
             }
 
@@ -1061,8 +1026,15 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 return 1000000;
             },
 
-            // calculate mantiene compatibilità: ritorna il minimo tra Itot e Imas
+            // calculate mantiene compatibilità: ritorna il minimo tra Itot, Imas e MassimaleSoggetto
             calculate: (params, operatorType, contextData) => {
+                // Preferiamo la funzione centrale che calcola e restituisce i dettagli
+                if (calculatorData && typeof calculatorData.computeFinalForIntervention === 'function') {
+                    const out = calculatorData.computeFinalForIntervention('isolamento-opache', params, operatorType, contextData);
+                    return out ? out.finale : 0;
+                }
+
+                // Fallback: calcolo locale come prima (Itot vs Imas)
                 const Itot = (calculatorData && calculatorData.interventions && calculatorData.interventions['isolamento-opache'] && typeof calculatorData.interventions['isolamento-opache'].computeItot === 'function')
                     ? calculatorData.interventions['isolamento-opache'].computeItot(params, operatorType, contextData)
                     : 0;
@@ -1158,11 +1130,22 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 });
                 
                 const imas = 1000000;
-                const finale = Math.min(incentivoTotale, imas);
-                
+                // Compute subject-level cap (Massimale Soggetto) and include it in final min
+                const sog = (typeof calculatorData.getMassimaleSoggetto === 'function')
+                    ? calculatorData.getMassimaleSoggetto('isolamento-opache', params, operatorType, contextData || {})
+                    : { massimale: Number.POSITIVE_INFINITY, finalPct: null };
+                const MassimaleSoggetto = sog.massimale || Number.POSITIVE_INFINITY;
+
+                const finale = Math.min(incentivoTotale, imas, MassimaleSoggetto);
+
                 steps.push(`Totale = ${calculatorData.formatNumber(incentivoTotale,2)} €`);
-                steps.push(`Finale = min(${calculatorData.formatNumber(incentivoTotale,2)}, ${calculatorData.formatNumber(imas,0)}) = ${calculatorData.formatNumber(finale,2)} €`);
-                
+                if (MassimaleSoggetto !== Number.POSITIVE_INFINITY) {
+                    steps.push(`Massimale soggetto = ${calculatorData.formatNumber(MassimaleSoggetto,2)} € (pct=${calculatorData.formatNumber((sog.finalPct||0)*100,2)}%)`);
+                    steps.push(`Finale = min(${calculatorData.formatNumber(incentivoTotale,2)}, ${calculatorData.formatNumber(imas,0)}, ${calculatorData.formatNumber(MassimaleSoggetto,2)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                } else {
+                    steps.push(`Finale = min(${calculatorData.formatNumber(incentivoTotale,2)}, ${calculatorData.formatNumber(imas,0)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                }
+
                 return {
                     result: finale,
                     formula: `Itot = Σ [p × min(Ci, Cmax,i) × Sint,i]${ueSelected ? ' (Prodotti UE inclusi nella percentuale)' : ''}`,
@@ -1173,7 +1156,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         p_value: percentuale,
                         ZonaClimatica: zona_climatica,
                         UE: ueSelected,
-                        Imas: imas
+                        Imas: imas,
+                        // Express massimale pct as percentage (e.g. 65%) instead of decimal
+                        MassimaleSoggetto_pct: (sog && typeof sog.finalPct === 'number') ? (calculatorData.formatNumber((sog.finalPct||0)*100,2) + ' %') : null,
+                        // List of applied premialita expressed in percentage points
+                        MassimaleSoggetto_premialita: (sog.appliedPremiums || []).map(p=> `${p.name} (+${Math.round((p.addedPct||0)*100)} pp)`)
                     },
                     steps
                 };
@@ -1199,97 +1186,112 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 },
                 { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] }
             ],
-            calculate: (params, operatorType, contextData) => {
+            // computeItot: theoretical total incentive without applying Imas or MassimaleSoggetto
+            computeItot: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico, zona_climatica } = params;
-                // Treat numeric zero as valid; only bail out when missing (undefined/null)
                 if (!superficie || costo_specifico === undefined || costo_specifico === null) return 0;
-                
-                // Cmax = 700 €/m² per zone A,B,C o 800 €/m² per zone D,E,F (secondo tabella ufficiale)
+
                 const cmaxInfissi = (zona_climatica === 'D' || zona_climatica === 'E' || zona_climatica === 'F') ? 800 : 700;
                 const costoNum = (costo_specifico === undefined || costo_specifico === null) ? 0 : Number(costo_specifico);
                 const costoEffettivo = Math.min(costoNum, cmaxInfissi);
-                
-                // Determina la percentuale base
-                const isArt48ter = contextData?.buildingSubcategory && 
-                                  ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
-                
-                // Piccoli comuni < 15.000 abitanti
-                const isPiccoloComune = contextData?.is_comune === true && 
-                                       contextData?.is_edificio_comunale === true &&
-                                       contextData?.is_piccolo_comune === true &&
-                                       contextData?.subjectType === 'pa' &&
-                                       contextData?.implementationMode === 'direct';
-                
-                // Verifica multi-intervento (55% per 1.A/1.B + 2.A/2.B/2.C/2.E)
-                const isMultiIntervento = contextData?.multiInterventionBonus === true;
-                
-                
-                // PRIORITÀ: Art. 48-ter e piccoli comuni hanno precedenza (100%)
-                // Determina percentuale centralizzata (include eventuale premio UE)
+
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'sostituzione-infissi');
                 const percentuale = det.p;
 
-                let incentivo = percentuale * costoEffettivo * superficie;
-                // percentuale include già il premio UE se applicabile; non moltiplichiamo ulteriormente
-                
-                // Imas = 500.000 €
-                const tettoMassimo = 500000;
-                return Math.min(incentivo, tettoMassimo);
+                return percentuale * costoEffettivo * superficie;
             },
+
+            // getImas: intervention-specific cap
+            getImas: (params, operatorType, contextData) => {
+                return 500000;
+            },
+
+            // calculate: delegate to central helper that computes final = min(Itot, Imas, MassimaleSoggetto)
+            calculate: (params, operatorType, contextData) => {
+                if (calculatorData && typeof calculatorData.computeFinalForIntervention === 'function') {
+                    const out = calculatorData.computeFinalForIntervention('sostituzione-infissi', params, operatorType, contextData);
+                    return out ? out.finale : 0;
+                }
+
+                // Fallback: local calculation
+                const Itot = (calculatorData && calculatorData.interventions && calculatorData.interventions['sostituzione-infissi'] && typeof calculatorData.interventions['sostituzione-infissi'].computeItot === 'function')
+                    ? calculatorData.interventions['sostituzione-infissi'].computeItot(params, operatorType, contextData)
+                    : 0;
+                const Imas = (calculatorData && calculatorData.interventions && calculatorData.interventions['sostituzione-infissi'] && typeof calculatorData.interventions['sostituzione-infissi'].getImas === 'function')
+                    ? calculatorData.interventions['sostituzione-infissi'].getImas(params, operatorType, contextData)
+                    : Number.POSITIVE_INFINITY;
+                return Math.min(Itot, Imas);
+            },
+
             explain: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico, zona_climatica } = params;
-                
-                // Cmax = 700 €/m² per zone A,B,C o 800 €/m² per zone D,E,F (secondo tabella ufficiale)
+                if (!superficie || superficie <= 0) {
+                    return {
+                        result: 0,
+                        formula: 'Nessuna superficie inserita',
+                        variables: {},
+                        steps: ['Inserire la superficie degli infissi']
+                    };
+                }
+
                 const cmaxInfissi = (zona_climatica === 'D' || zona_climatica === 'E' || zona_climatica === 'F') ? 800 : 700;
                 const costoNum = (costo_specifico === undefined || costo_specifico === null) ? 0 : Number(costo_specifico);
                 const costoEffettivo = Math.min(costoNum, cmaxInfissi);
-                
-                // Determina percentuale centralmente (include eventuale premio Prodotti UE)
+
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'sostituzione-infissi');
                 const percentuale = det.p;
                 const percentualeDesc = det.pDesc;
 
-                const base = percentuale * costoEffettivo * (superficie || 0);
-                // UE: verifica richiesta e se effettivamente applicata (la percentuale può essere già al 100%)
-                const ueRequested = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
-                const ueApplicata = ueRequested && percentuale < 1.0;
-                const imas = 500000;
-                const finale = Math.min(base, imas);
-                
+                const Itot = (calculatorData && calculatorData.interventions && typeof calculatorData.interventions['sostituzione-infissi'].computeItot === 'function')
+                    ? calculatorData.interventions['sostituzione-infissi'].computeItot(params, operatorType, contextData)
+                    : percentuale * costoEffettivo * (superficie || 0);
+
+                const imas = (calculatorData && calculatorData.interventions && typeof calculatorData.interventions['sostituzione-infissi'].getImas === 'function')
+                    ? calculatorData.interventions['sostituzione-infissi'].getImas(params, operatorType, contextData)
+                    : 500000;
+
+                // Compute subject-level massimale using central helper (includes premialita)
+                const sog = (typeof calculatorData.getMassimaleSoggetto === 'function')
+                    ? calculatorData.getMassimaleSoggetto('sostituzione-infissi', params, operatorType, contextData || {})
+                    : { massimale: Number.POSITIVE_INFINITY, finalPct: null, appliedPremiums: [] };
+                const MassimaleSoggetto = sog.massimale || Number.POSITIVE_INFINITY;
+
+                const finale = Math.min(Itot, imas, MassimaleSoggetto);
+
                 const superaCmax = (Number(costo_specifico || 0) > cmaxInfissi);
-                
+
+                const steps = [];
+                steps.push(`Zona climatica: ${zona_climatica}`);
+                steps.push(`Percentuale incentivazione: ${percentualeDesc}`);
+                steps.push(`Cmax = ${cmaxInfissi} €/m²`);
+                steps.push(`C = ${calculatorData.formatNumber(costo_specifico,2)} €/m²`);
+                steps.push(superaCmax ? `⚠️  C supera Cmax! Uso Cmax=${cmaxInfissi} €/m²` : `✓ C (${calculatorData.formatNumber(costo_specifico,2)} €/m²) ≤ Cmax (${calculatorData.formatNumber(cmaxInfissi,2)} €/m²)`);
+                steps.push(`Ceff = min(${calculatorData.formatNumber(costo_specifico,2)}, ${cmaxInfissi}) = ${calculatorData.formatNumber(costoEffettivo,2)} €/m²`);
+                steps.push(`Itot = ${calculatorData.formatNumber(percentuale,4)} × ${calculatorData.formatNumber(costoEffettivo,2)} × ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(Itot,2)} €`);
+                if (MassimaleSoggetto !== Number.POSITIVE_INFINITY) {
+                    steps.push(`Massimale soggetto = ${calculatorData.formatNumber(MassimaleSoggetto,2)} € (pct=${calculatorData.formatNumber((sog.finalPct||0)*100,2)}%)`);
+                    steps.push(`Finale = min(${calculatorData.formatNumber(Itot,2)}, ${calculatorData.formatNumber(imas,0)}, ${calculatorData.formatNumber(MassimaleSoggetto,2)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                } else {
+                    steps.push(`Finale = min(${calculatorData.formatNumber(Itot,2)}, ${calculatorData.formatNumber(imas,0)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                }
+
                 return {
                     result: finale,
-                    formula: `Itot = p × min(C, ${cmaxInfissi}) × Sint; Imas=${calculatorData.formatNumber(imas)}€`,
-                    // unify p/pDesc: present readable `p` and keep numeric `p_value`
-                    variables: { 
-                        p: percentualeDesc, 
+                    formula: `Itot = p × min(C, ${cmaxInfissi}) × Sint`,
+                    variables: {
+                        p: percentualeDesc,
                         p_value: percentuale,
-                        C: costo_specifico || 0, 
+                        C: costo_specifico || 0,
                         Cmax: cmaxInfissi,
-                        Ceff: costoEffettivo, 
-                        Sint: superficie || 0, 
-                        UE: ueApplicata,
+                        Ceff: costoEffettivo,
+                        Sint: superficie || 0,
+                        UE: !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue'))),
                         ZonaClimatica: zona_climatica,
-                        Imas: imas 
+                        Imas: imas,
+                        MassimaleSoggetto_pct: (sog && typeof sog.finalPct === 'number') ? (calculatorData.formatNumber((sog.finalPct||0)*100,2) + ' %') : null,
+                        MassimaleSoggetto_premialita: (sog.appliedPremiums || []).map(p=> `${p.name} (+${Math.round((p.addedPct||0)*100)} pp)`)
                     },
-                    steps: [
-                        `Zona climatica: ${zona_climatica}`,
-                        `Percentuale incentivazione: ${percentualeDesc}`,
-                        `Cmax = ${cmaxInfissi} €/m²`,
-                        `C = ${calculatorData.formatNumber(costo_specifico,2)} €/m²`,
-                        superaCmax 
-                            ? `⚠️  C supera Cmax! Uso Cmax=${cmaxInfissi} €/m²` 
-                            : `✓ C (${calculatorData.formatNumber(costo_specifico,2)} €/m²) ≤ Cmax (${calculatorData.formatNumber(cmaxInfissi,2)} €/m²)`,
-                        `Ceff = min(${calculatorData.formatNumber(costo_specifico,2)}, ${cmaxInfissi}) = ${calculatorData.formatNumber(costoEffettivo,2)} €/m²`,
-                        `Base = ${calculatorData.formatNumber(percentuale,2)} × ${calculatorData.formatNumber(costoEffettivo,2)} × ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(base,2)} €`,
-                        ueApplicata 
-                            ? `Premio Prodotti UE: incluso nella percentuale di incentivazione (p=` 
-                            : (ueRequested && percentuale >= 1.0)
-                                ? `UE: non applicata (già al 100%)`
-                                : `UE: non applicata`,
-                        `Finale = min(${calculatorData.formatNumber(base,2)}, ${calculatorData.formatNumber(imas)}) = ${calculatorData.formatNumber(finale,2)} €`
-                    ]
+                    steps
                 };
             }
         },
@@ -2089,14 +2091,9 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         const tipoLower = String(tipo_pompa || '').toLowerCase();
                         const isFixedDouble = tipoLower.includes('fixed') && tipoLower.includes('double');
                         if (isFixedDouble) {
-                            // Ensure we pick COP minimum from normative spec (respects GWP band)
-                            const copMinSpec = (typeof getPumpEcodesignSpec === 'function') ? (getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {}).cop : (spec.cop || null);
+                            const copMinSpec = (typeof getPumpEcodesignSpec === 'function') ? (getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {}).cop : (spec.cop || minValue);
                             const copMin = (copMinSpec === undefined || copMinSpec === null) ? minValue : Number(copMinSpec);
-                            if (userValue !== null && userValue !== undefined && copMin > 0) {
-                                kp = Number(userValue) / Number(copMin);
-                            } else {
-                                kp = 1;
-                            }
+                            kp = (copMin > 0) ? (Number(cop) / copMin) : 1;
                         } else if (seasonalMin !== null && eff_stagionale !== null && seasonalMin > 0) {
                             kp = Number(eff_stagionale) / Number(seasonalMin);
                         } else {
@@ -3027,41 +3024,115 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             }
             // Altrimenti proseguiamo con la modalità standard
         
-            // Helper: massimale per soggetto (usato anche per singoli interventi)
-            this.getMassimaleSoggetto = function(opType) {
-                const maxIncentiveByOperator = {
-                    'pa': 5000000, // 5M€ per PA
-                    'private_tertiary_person': 2000000, // 2M€ per privati terziario (non imprese)
-                    'private_tertiary_small': 2000000, // 2M€ per piccole imprese ed ETS economici
-                    'private_tertiary_medium': 2000000, // 2M€ per medie imprese
-                    'private_tertiary_large': 2000000, // 2M€ per grandi imprese
-                    'private_residential': 1000000 // 1M€ per privati residenziale
+            // Helper: massimale per soggetto calcolato come PercentualeMassimaleSoggetto * CostoAmmissibile (per intervento)
+            // Restituisce il massimale in euro per il singolo intervento
+            this.getMassimaleSoggetto = function(interventionId, params, opType, ctx) {
+                // Determina il CostoAmmissibile per l'intervento (somma dei campi costo_totale o fallback)
+                let costoAmmissibile = 0;
+                // Direct common fields
+                if (params) {
+                    if (params.costo_totale) costoAmmissibile = Number(params.costo_totale) || 0;
+                    if (!costoAmmissibile && params.spesa_totale) costoAmmissibile = Number(params.spesa_totale) || 0;
+                }
+
+                // If still zero, search for row arrays containing costo_totale
+                if (!costoAmmissibile && params && typeof params === 'object') {
+                    const rowArrays = Object.keys(params).filter(k => Array.isArray(params[k]));
+                    for (const k of rowArrays) {
+                        const arr = params[k];
+                        const s = arr.reduce((sum, r) => sum + (parseFloat(r?.costo_totale) || 0), 0);
+                        if (s > 0) { costoAmmissibile = s; break; }
+                    }
+                }
+
+                // Fallbacks: superficie*costo_specifico
+                if (!costoAmmissibile && params && params.superficie && params.costo_specifico) {
+                    costoAmmissibile = Number(params.superficie) * Number(params.costo_specifico);
+                }
+
+                // Percentuali base per tipo soggetto
+                const pctMap = {
+                    'pa': 1.00,
+                    'private_tertiary_person': 1.00,
+                    'private_tertiary_small': 0.45,
+                    'private_tertiary_medium': 0.35,
+                    'private_tertiary_large': 0.25,
+                    'private_residential': 1.00
                 };
-                return maxIncentiveByOperator[opType] || 2000000;
+
+                const basePct = pctMap[opType] !== undefined ? pctMap[opType] : 1.0;
+
+                // Calcola eventuali incrementi premiali (selezionati in contextData.selectedPremiums)
+                // Flags attesi in contextData.selectedPremiums (array):
+                // - 'a107_3_a' => +15pp
+                // - 'a107_3_c' => +5pp
+                // - 'miglioramento_40' => +15pp
+                // Premialità tipo B (applicata alla percentuale del soggetto): +5pp quando
+                // vengono realizzati più interventi di Categoria 1 oppure quando è selezionato NZEB da solo.
+
+                let addPct = 0;
+                const selectedPremiums = (ctx && Array.isArray(ctx.selectedPremiums)) ? ctx.selectedPremiums : (ctx && ctx.selectedPremiums ? ctx.selectedPremiums : []);
+                if (selectedPremiums.includes('a107_3_a')) addPct += 0.15;
+                if (selectedPremiums.includes('a107_3_c')) addPct += 0.05;
+                if (selectedPremiums.includes('miglioramento_40')) addPct += 0.15;
+
+                // Determine selected interventions and count how many are Category 1
+                const selInts = (ctx && Array.isArray(ctx.selectedInterventions)) ? ctx.selectedInterventions.slice() : [];
+                let category1Count = 0;
+                for (const id of selInts) {
+                    const it = this.interventions && this.interventions[id];
+                    if (!it) continue;
+                    const name = (it.name || '').toString().trim();
+                    if (name.startsWith('1.')) category1Count += 1;
+                    // treat 'nzeb' as special: if present, we will apply tipo B bonus regardless of other counts
+                }
+
+                if (selInts.includes('nzeb')) {
+                    // NZEB selected: exclusive and treated as tipo B multi-intervento -> +5pp
+                    addPct += 0.05;
+                } else if (category1Count > 1) {
+                    // Multiple Category 1 interventions => tipo B multi-intervento applies
+                    addPct += 0.05;
+                }
+
+                const finalPct = Math.min(1.0, +(basePct + addPct).toFixed(4));
+
+                const massimale = costoAmmissibile > 0 ? Math.round(finalPct * costoAmmissibile) : 0;
+                return { massimale, finalPct, costoAmmissibile, basePct, addPct };
             };
 
             // Helper: calcola il risultato dettagliato per un singolo intervento
             // Restituisce { Itot, Imas, MassimaleSoggetto, finale }
             this.computeFinalForIntervention = function(interventionId, params, opType, ctx) {
                 const intervention = this.interventions && this.interventions[interventionId];
-                if (!intervention) return { Itot: 0, Imas: 0, MassimaleSoggetto: this.getMassimaleSoggetto(opType), finale: 0 };
+                // Normalize context: if NZEB is selected, treat it as exclusive (no other interventions)
+                const localCtx = Object.assign({}, ctx || {});
+                const sel = Array.isArray(localCtx.selectedInterventions) ? localCtx.selectedInterventions.slice() : (localCtx.selectedInterventions ? [localCtx.selectedInterventions] : []);
+                if (sel.includes('nzeb')) localCtx.selectedInterventions = ['nzeb'];
+
+                if (!intervention) {
+                    // Backwards compatible: return zeroes and massimale object for caller inspection
+                    const sog = this.getMassimaleSoggetto(interventionId, params, opType, localCtx) || { massimale: 0 };
+                    return { Itot: 0, Imas: 0, MassimaleSoggetto: sog.massimale || 0, finale: 0, soggettoDetails: sog };
+                }
 
                 // Itot: preferisci computeItot se disponibile, altrimenti tenta calculate (attenzione: calculate potrebbe già applicare Imas)
                 let Itot = 0;
                 if (typeof intervention.computeItot === 'function') {
-                    Itot = intervention.computeItot(params, opType, ctx);
+                    Itot = intervention.computeItot(params, opType, localCtx);
                 } else if (typeof intervention.calculate === 'function') {
                     // In assenza di computeItot usiamo calculate come fallback (potrebbe applicare Imas già)
-                    Itot = intervention.calculate(params, opType, ctx);
+                    Itot = intervention.calculate(params, opType, localCtx);
                 }
 
                 // Imas: preferisci getImas se disponibile, altrimenti considerala infinita (nessun cap a livello intervento)
-                let Imas = (typeof intervention.getImas === 'function') ? intervention.getImas(params, opType, ctx) : Number.POSITIVE_INFINITY;
+                let Imas = (typeof intervention.getImas === 'function') ? intervention.getImas(params, opType, localCtx) : Number.POSITIVE_INFINITY;
 
-                const MassimaleSoggetto = this.getMassimaleSoggetto(opType);
+                const soggetto = this.getMassimaleSoggetto(interventionId, params, opType, localCtx);
+                const MassimaleSoggetto = soggetto.massimale || 0;
 
                 const finale = Math.min(Itot, Imas, MassimaleSoggetto);
-                return { Itot, Imas, MassimaleSoggetto, finale };
+                return { Itot, Imas, MassimaleSoggetto, finale, soggettoDetails: soggetto };
             };
         }
 
@@ -3245,4 +3316,134 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         };
     }
 };
+
+// Public helpers: expose massimale and per-intervention final calculation
+// so external scripts/tests can call them directly on `calculatorData`.
+calculatorData.getMassimaleSoggetto = function(interventionId, params, opType, ctx) {
+    // Determine eligible cost
+    let costoAmmissibile = 0;
+    if (params) {
+        if (params.costo_totale) costoAmmissibile = Number(params.costo_totale) || 0;
+        if (!costoAmmissibile && params.spesa_totale) costoAmmissibile = Number(params.spesa_totale) || 0;
+    }
+    if (!costoAmmissibile && params && typeof params === 'object') {
+        const rowArrays = Object.keys(params).filter(k => Array.isArray(params[k]));
+        for (const k of rowArrays) {
+            const arr = params[k];
+            const s = arr.reduce((sum, r) => sum + (parseFloat(r?.costo_totale) || 0), 0);
+            if (s > 0) { costoAmmissibile = s; break; }
+        }
+    }
+    if (!costoAmmissibile && params && params.superficie && params.costo_specifico) {
+        costoAmmissibile = Number(params.superficie) * Number(params.costo_specifico);
+    }
+
+    const pctMap = {
+        'pa': 1.00,
+        'private_tertiary_person': 1.00,
+        'private_tertiary_small': 0.45,
+        'private_tertiary_medium': 0.35,
+        'private_tertiary_large': 0.25,
+        'private_residential': 1.00
+    };
+    const basePct = pctMap[opType] !== undefined ? pctMap[opType] : 1.0;
+
+    // Collect premium flags from multiple possible sources (ctx or params), supporting
+    // arrays, objects with boolean flags, or direct boolean fields.
+    let addPct = 0;
+    // Map UI subject-specific flags to canonical premium keys
+    const premiumAliases = {
+        'a107_3_a': ['INCREMENTO_INT3'],
+        'a107_3_c': ['INCREMENTO_INT4'],
+        'miglioramento_40': ['INCREMENTO_INT5']
+    };
+
+    function hasPremium(name) {
+        // ctx.selectedPremiums as array
+        if (ctx) {
+            if (Array.isArray(ctx.selectedPremiums) && ctx.selectedPremiums.includes(name)) return true;
+            if (Array.isArray(ctx.premiums) && ctx.premiums.includes(name)) return true;
+            if (ctx.premiums && typeof ctx.premiums === 'object' && ctx.premiums[name]) return true;
+            if (ctx[name] === true) return true;
+        }
+        if (params) {
+            if (Array.isArray(params.premiums) && params.premiums.includes(name)) return true;
+            if (params.premiums && typeof params.premiums === 'object' && params.premiums[name]) return true;
+            if (params[name] === true) return true;
+        }
+        // Also check alias flags (e.g. INCREMENTO_INT3)
+        const aliases = premiumAliases[name] || [];
+        for (const a of aliases) {
+            if (ctx && Array.isArray(ctx.selectedPremiums) && ctx.selectedPremiums.includes(a)) return true;
+            if (ctx && ctx.premiums && typeof ctx.premiums === 'object' && ctx.premiums[a]) return true;
+            if (ctx && ctx[a] === true) return true;
+            if (params && Array.isArray(params.premiums) && params.premiums.includes(a)) return true;
+            if (params && params.premiums && typeof params.premiums === 'object' && params.premiums[a]) return true;
+            if (params && params[a] === true) return true;
+        }
+        return false;
+    }
+    if (hasPremium('a107_3_a')) addPct += 0.15;
+    if (hasPremium('a107_3_c')) addPct += 0.05;
+    if (hasPremium('miglioramento_40')) addPct += 0.15;
+
+    const selInts = (ctx && Array.isArray(ctx.selectedInterventions)) ? ctx.selectedInterventions.slice() : [];
+    let category1Count = 0;
+    for (const id of selInts) {
+        const it = calculatorData.interventions && calculatorData.interventions[id];
+        if (!it) continue;
+        const name = (it.name || '').toString().trim();
+        if (name.startsWith('1.')) category1Count += 1;
+    }
+    if (selInts.includes('nzeb')) addPct += 0.05;
+    else if (category1Count > 1) addPct += 0.05;
+
+    const finalPct = Math.min(1.0, +(basePct + addPct).toFixed(4));
+    const massimale = costoAmmissibile > 0 ? Math.round(finalPct * costoAmmissibile) : 0;
+
+    // Build list of applied premialita (human-readable) for UI
+    const premiumLabels = {
+        'a107_3_a': 'Localizzazione (art.107(3)(a))',
+        'a107_3_c': 'Localizzazione (art.107(3)(c))',
+        'miglioramento_40': 'Miglioramento ≥40% prestazione energetica',
+        'multi-intervento-b': 'Multi-intervento (maggiorazione massimale)'
+    };
+
+    const appliedPremiums = [];
+    if (hasPremium('a107_3_a')) appliedPremiums.push({ id: 'a107_3_a', name: premiumLabels['a107_3_a'], addedPct: 0.15 });
+    if (hasPremium('a107_3_c')) appliedPremiums.push({ id: 'a107_3_c', name: premiumLabels['a107_3_c'], addedPct: 0.05 });
+    if (hasPremium('miglioramento_40')) appliedPremiums.push({ id: 'miglioramento_40', name: premiumLabels['miglioramento_40'], addedPct: 0.15 });
+    // multi-intervento type B: recorded if we added addPct due to nzeb or multiple category1
+    if ((ctx && Array.isArray(ctx.selectedInterventions) && ctx.selectedInterventions.includes('nzeb')) || (typeof category1Count !== 'undefined' && category1Count > 1)) {
+        appliedPremiums.push({ id: 'multi-intervento-b', name: premiumLabels['multi-intervento-b'], addedPct: 0.05 });
+    }
+
+    return { massimale, finalPct, costoAmmissibile, basePct, addPct, appliedPremiums };
+};
+
+calculatorData.computeFinalForIntervention = function(interventionId, params, opType, ctx) {
+    const intervention = calculatorData.interventions && calculatorData.interventions[interventionId];
+    const localCtx = Object.assign({}, ctx || {});
+    const sel = Array.isArray(localCtx.selectedInterventions) ? localCtx.selectedInterventions.slice() : (localCtx.selectedInterventions ? [localCtx.selectedInterventions] : []);
+    if (sel.includes('nzeb')) localCtx.selectedInterventions = ['nzeb'];
+
+    if (!intervention) {
+        const sog = calculatorData.getMassimaleSoggetto(interventionId, params, opType, localCtx) || { massimale: 0 };
+        return { Itot: 0, Imas: 0, MassimaleSoggetto: sog.massimale || 0, finale: 0, soggettoDetails: sog };
+    }
+
+    let Itot = 0;
+    if (typeof intervention.computeItot === 'function') {
+        Itot = intervention.computeItot(params, opType, localCtx);
+    } else if (typeof intervention.calculate === 'function') {
+        Itot = intervention.calculate(params, opType, localCtx);
+    }
+
+    let Imas = (typeof intervention.getImas === 'function') ? intervention.getImas(params, opType, localCtx) : Number.POSITIVE_INFINITY;
+    const soggetto = calculatorData.getMassimaleSoggetto(interventionId, params, opType, localCtx);
+    const MassimaleSoggetto = soggetto.massimale || 0;
+    const finale = Math.min(Itot, Imas, MassimaleSoggetto);
+    return { Itot, Imas, MassimaleSoggetto, finale, soggettoDetails: soggetto };
+};
+
 

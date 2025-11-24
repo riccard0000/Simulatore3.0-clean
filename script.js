@@ -30,6 +30,9 @@ async function initCalculator() {
         subjectSpecificData: {} // Dati aggiuntivi come popolazione_comune
     };
 
+    // Keep previous selection snapshot to allow reverting when user attempts incompatible selection
+    let prevSelectedInterventions = [];
+
     // NOTE: automatic ecodesign SCOP/COP population removed per user request.
     // Users must enter SCOP/SCOP_min manually; validation and power constraints remain active.
 
@@ -1132,13 +1135,137 @@ async function initCalculator() {
 
         interventionsList.addEventListener('change', (e) => {
             if (e.target.name === 'intervention') {
-                state.selectedInterventions = Array.from(
+                // Compute new selection
+                const newSelected = Array.from(
                     interventionsList.querySelectorAll('input[name="intervention"]:checked')
                 ).map(input => input.value);
+
+                // Incompatibility rule: NZEB cannot be selected with any other intervention
+                const nzebSelected = newSelected.includes('nzeb');
+                const otherSelected = newSelected.filter(id => id !== 'nzeb');
+                if (nzebSelected && otherSelected.length > 0) {
+                    // Revert the change and show modal informing the user with action to resolve
+                    restoreSelection(prevSelectedInterventions);
+                    showIncompatibilityModal('Gli interventi NZEB sono incompatibili con qualsiasi altro intervento. Seleziona NZEB da solo oppure deseleziona NZEB per scegliere altri interventi.', { type: 'nzeb_conflict', desiredSelection: ['nzeb'] });
+                    return;
+                }
+
+                // If user selected non-nzeb while nzeb was previously selected, prevent it and provide actions
+                if (!nzebSelected && prevSelectedInterventions.includes('nzeb') && newSelected.length > 0) {
+                    restoreSelection(prevSelectedInterventions);
+                    showIncompatibilityModal('Gli interventi NZEB sono incompatibili con qualsiasi altro intervento. Deseleziona NZEB prima di aggiungere altri interventi.', { type: 'others_conflict', desiredSelection: otherSelected });
+                    return;
+                }
+
+                // Accept new selection
+                state.selectedInterventions = newSelected;
+                prevSelectedInterventions = state.selectedInterventions.slice();
+
+                // Update dynamic inputs and visual disabling of incompatible choices
                 updateDynamicInputs();
-                // populatePremiums(); // Rimosso: sezione premialità nascosta
+                enforceNzebExclusivity();
             }
         });
+
+        // Restore checkbox selection to a given array of ids
+        function restoreSelection(ids) {
+            const checkboxes = interventionsList.querySelectorAll('input[name="intervention"]');
+            checkboxes.forEach(cb => {
+                cb.checked = ids.includes(cb.value);
+            });
+        }
+
+        // Enforce disabling rules in UI: if any non-nzeb is selected, disable nzeb; if nzeb is selected, disable others
+        function enforceNzebExclusivity() {
+            const allCheckboxes = Array.from(interventionsList.querySelectorAll('input[name="intervention"]'));
+            const nzebCb = interventionsList.querySelector('input[value="nzeb"][name="intervention"]');
+            const anyNonNzebSelected = state.selectedInterventions.some(id => id !== 'nzeb');
+            const nzebIsSelected = state.selectedInterventions.includes('nzeb');
+
+            allCheckboxes.forEach(cb => {
+                if (!nzebCb) return;
+                if (cb === nzebCb) {
+                    // disable NZEB when any other selected (and not itself selected alone)
+                    cb.disabled = anyNonNzebSelected && !nzebIsSelected;
+                } else {
+                    // disable other checkboxes when nzeb is selected
+                    cb.disabled = nzebIsSelected;
+                }
+            });
+        }
+
+        // Show an informational modal for incompatibility
+        function showIncompatibilityModal(message, options = {}) {
+            // If a modal already exists, update text and return (but also update buttons)
+            let modal = document.getElementById('incompat-modal');
+            const type = options.type || null;
+            const desired = Array.isArray(options.desiredSelection) ? options.desiredSelection.slice() : [];
+            function buildButtons() {
+                // Default close button
+                let btns = `<button id="incompat-close" style="padding:8px 12px; margin-left:8px;">Chiudi</button>`;
+                if (type === 'nzeb_conflict') {
+                    btns = `<button id="incompat-select-nzeb" style="padding:8px 12px;">Deseleziona altri e seleziona NZEB</button>` + btns;
+                } else if (type === 'others_conflict') {
+                    btns = `<button id="incompat-select-others" style="padding:8px 12px;">Deseleziona NZEB e seleziona altri</button>` + btns;
+                }
+                return btns;
+            }
+
+            if (modal) {
+                modal.querySelector('.modal-body').textContent = message;
+                const controls = modal.querySelector('.modal-controls');
+                if (controls) controls.innerHTML = buildButtons();
+                modal.style.display = 'block';
+            } else {
+                modal = document.createElement('div');
+                modal.id = 'incompat-modal';
+                modal.style.position = 'fixed';
+                modal.style.left = '0';
+                modal.style.top = '0';
+                modal.style.right = '0';
+                modal.style.bottom = '0';
+                modal.style.background = 'rgba(0,0,0,0.5)';
+                modal.style.display = 'flex';
+                modal.style.alignItems = 'center';
+                modal.style.justifyContent = 'center';
+                modal.style.zIndex = '9999';
+
+                modal.innerHTML = `
+                    <div style="background:white; padding:20px; border-radius:8px; max-width:560px; text-align:left; box-shadow: 0 8px 24px rgba(0,0,0,0.2);">
+                        <h3 style="margin-top:0;">Selezione incompatibile</h3>
+                        <div class="modal-body" style="margin-bottom:16px;">${message}</div>
+                        <div class="modal-controls" style="text-align:right;">${buildButtons()}</div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            }
+
+            // Attach handlers for dynamic buttons
+            const closeBtn = document.getElementById('incompat-close');
+            if (closeBtn) closeBtn.addEventListener('click', () => { modal.style.display = 'none'; });
+
+            const selNzebBtn = document.getElementById('incompat-select-nzeb');
+            if (selNzebBtn) selNzebBtn.addEventListener('click', () => {
+                // Deselect all and select nzeb
+                restoreSelection(['nzeb']);
+                state.selectedInterventions = ['nzeb'];
+                prevSelectedInterventions = ['nzeb'];
+                enforceNzebExclusivity();
+                updateDynamicInputs();
+                modal.style.display = 'none';
+            });
+
+            const selOthersBtn = document.getElementById('incompat-select-others');
+            if (selOthersBtn) selOthersBtn.addEventListener('click', () => {
+                // Deselect nzeb and select desired others
+                restoreSelection(desired);
+                state.selectedInterventions = desired.slice();
+                prevSelectedInterventions = desired.slice();
+                enforceNzebExclusivity();
+                updateDynamicInputs();
+                modal.style.display = 'none';
+            });
+        }
 
         // DISABILITATO: Event listener per premiums (sezione nascosta)
         // premiumsList.addEventListener('change', (e) => {

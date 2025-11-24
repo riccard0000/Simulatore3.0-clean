@@ -34,13 +34,85 @@ Questo documento descrive: le formule, come sono mappate nel codice esistente (`
 
 - MassimaleSoggetto
   - Mappato centralmente in `getMassimaleSoggetto(operatorType)` con la tabella:
-    - `pa`: 5.000.000 €
-    - `private_tertiary_person`: 2.000.000 €
-    - `private_tertiary_small`: 2.000.000 €
-    - `private_tertiary_medium`: 2.000.000 €
-    - `private_tertiary_large`: 2.000.000 €
-    - `private_residential`: 1.000.000 €
-  - Nota: può essere personalizzato in base a esigenze normative
+  - Ora calcolato come: MassimaleSoggetto = PercentualeMassimaleSoggetto × CostoAmmissibile (per singolo intervento).
+  - Percentuali base utilizzate (per `operatorType`):
+    - `pa`: 100% (1.00)
+    - `private_tertiary_person`: 100% (1.00)
+    - `private_tertiary_small`: 45% (0.45)
+    - `private_tertiary_medium`: 35% (0.35)
+    - `private_tertiary_large`: 25% (0.25)
+    - `private_residential`: 100% (1.00)
+  - Premialità selezionabili (incrementano la percentuale prima della moltiplicazione):
+    - `a107_3_a`: interventi realizzati in zone assistite ai sensi dell'art.107(3)(a) → +15 punti percentuali (+0.15)
+    - `a107_3_c`: interventi realizzati in zone assistite ai sensi dell'art.107(3)(c) → +5 punti percentuali (+0.05)
+    - `miglioramento_40`: intervento che determina un miglioramento ≥40% della prestazione energetica → +15 punti percentuali (+0.15)
+  - Nota: gli incrementi si sommano alla percentuale base e il risultato è limitato al 100% (1.0). Il `CostoAmmissibile` è calcolato per singolo intervento usando i campi `costo_totale`, somma delle righe dell'intervento o campi equivalenti presenti in `params`.
+
+### Dettaglio esplicativo: come funzionano le premialità per il Massimale Soggetto
+
+- Termini delle premialità che determinano il Massimale Soggetto
+  - `a107_3_a` (LOCALIZZAZIONE art.107(3)(a)): +0.15 (15 punti percentuali)
+  - `a107_3_c` (LOCALIZZAZIONE art.107(3)(c)): +0.05 (5 punti percentuali)
+  - `miglioramento_40`: intervento che migliora la prestazione energetica ≥40%: +0.15 (15 punti percentuali)
+
+- Come si combinano
+  - Si sommano alla `basePct` definita per `operatorType` (es. `private_tertiary_medium = 0.35`).
+  - A questo totale si aggiunge la maggiorazione multi-intervento di tipo B quando applicabile (+0.05): si applica se nel perimetro sono presenti più interventi di Categoria 1 o se è selezionato `nzeb` da solo.
+  - Il valore finale viene limitato a 1.0 (100%).
+
+- Formula pratica
+  - `finalPct = min(1.0, basePct + sum(premialita) + multiInterventoB)`
+  - `MassimaleSoggetto = finalPct × CostoAmmissibile`
+
+- Dove leggere i flag di input (forme supportate)
+  - `contextData.selectedPremiums`: array di stringhe (es. `['a107_3_a','miglioramento_40']`) — usato dal front-end nel `contextData` passato al calcolatore.
+  - `contextData.premiums` o `params.premiums`: oggetto con flag booleani (es. `{ a107_3_a: true, miglioramento_40: true }`) o array equivalente.
+  - flag diretti in `params` o in `contextData`: `params.a107_3_a = true` o `contextData.INCREMENTO_INT3 = true`.
+  - UI alias: il front-end attiva i flag di "LOCALIZZAZIONE" come `INCREMENTO_INT3`, `INCREMENTO_INT4`, `INCREMENTO_INT5`; questi sono mappati internamente a `a107_3_a`, `a107_3_c`, `miglioramento_40` rispettivamente.
+
+- Esempi
+  - Esempio 1 — passaggio tramite `contextData.selectedPremiums`:
+
+```js
+const contextData = {
+  selectedInterventions: ['isolamento-opache'],
+  selectedPremiums: ['a107_3_a', 'miglioramento_40']
+};
+```
+
+  - Esempio 2 — passaggio tramite `params` (object flags):
+
+```js
+const params = {
+  righe_opache: [...],
+  zona_climatica: 'A',
+  premiums: { a107_3_a: true }
+};
+```
+
+  - Esempio 3 — UI alias (come il front-end invia i flag):
+
+```js
+const contextData = {
+  selectedInterventions: ['isolamento-opache'],
+  selectedPremiums: ['INCREMENTO_INT3'] // internamente trattato come 'a107_3_a'
+};
+```
+
+- Note operative
+  - La funzione `getMassimaleSoggetto(...)` nel file `data.js` raccoglie i flag da `contextData` e da `params`, supportando le forme sopra indicate; inoltre verifica gli alias UI (`INCREMENTO_INT3/4/5`) e applica le incrementazioni in modo additive.
+
+
+  - Regole speciali per `nzeb` (1.D):
+    - Se l'intervento `nzeb` è selezionato, la selezione è esclusiva: altri interventi non sono considerati insieme a `nzeb` (la logica di calcolo ignora altre selezioni quando `nzeb` è presente).
+
+  - Multi-intervento: definizioni e applicazione
+    - Esistono due tipi distinti di multi-intervento rilevanti per il calcolo:
+      1. Multi-intervento tipo A (percentuale di incentivazione p): è una maggiorazione della percentuale p applicabile SOLO agli interventi `1.A` e `1.B` quando sono realizzati congiuntamente ad almeno uno degli interventi di Titolo III (es. 2.A, 2.B, 2.C, 2.E). Questa logica è implementata in `determinePercentuale(...)` e modifica il valore di `p` usato per il calcolo degli incentivi (Itot) — non riguarda il Massimale Soggetto.
+      2. Multi-intervento tipo B (maggiorazione percentuale sul Massimale Soggetto): è una maggiorazione della percentuale applicata al Massimale Soggetto (±5 punti percentuali). Si applica quando nel perimetro di realizzo sono presenti più interventi di Categoria 1 (es. 1.A + 1.B) oppure quando è realizzato `nzeb` da solo. A differenza del tipo A, questa maggiorazione viene applicata a TUTTI gli interventi ai fini del calcolo del Massimale Soggetto.
+    - Sintesi pratica:
+      - Tipo A: impatta solo `p` per 1.A/1.B e richiede la presenza di Titolo III.
+      - Tipo B: impatta `MassimaleSoggetto` (finalPct) quando sono più interventi di Categoria 1 o `nzeb` selezionato; viene applicato a tutti gli interventi per il calcolo dei massimali.
 
 - Incentivo finale
   - finale = min(Itot, Imas, MassimaleSoggetto)
@@ -82,7 +154,9 @@ Esempio 2 (più righe, supera Cmax):
 
 ## 5. Casi di test consigliati (da automatizzare in `tests/`)
 1. Zona E, singola riga (vedi Esempio 1) → verifica Itot, Imas, MassimaleSoggetto e Finale
-2. Multi-intervento: `isolamento-opache` + `pompa-calore` → verifica che `determinePercentuale` ritorni 55% per 1.A quando applicabile
+2. Multi-intervento (tipo A): verifica dei comportamenti
+  - Caso A (1.A): `isolamento-opache` + almeno uno tra `2.A`/`2.B`/`2.C`/`2.E` → `determinePercentuale` deve restituire `p = 55%` per `1.A`.
+  - Caso B (1.B): `sostituzione-infissi` ottiene `p = 55%` SOLO se è presente anche `1.A` e almeno uno tra `2.A`/`2.B`/`2.C`/`2.E`; in questo caso la maggiorazione viene applicata sia a `1.A` che a `1.B`.
 3. Premio Prodotti UE: caso con `premiums['prodotti-ue']=true` → verifica che `p` aumenti di 10pp (cap 100%) e che Itot accordingly aumenti
 4. Art.48-ter: `buildingSubcategory: 'tertiary_school'` → verifica `p=1.0` e che `computeFinalForIntervention` applichi `min(Itot, Imas, MassimaleSoggetto)` con Itot calcolato come p×…
 5. Superamento Imas: costruire Itot > 1.000.000 e verificare che finale = Imas
