@@ -1343,7 +1343,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     help: 'Inserisci una riga per ogni tipologia di schermatura solare. Puoi aggiungere più tipologie.'
                 }
             ],
-            calculate: (params, operatorType, contextData) => {
+            // computeItot: calculate total theoretical incentive (per-row caps applied, but not Imas or MassimaleSoggetto)
+            computeItot: (params, operatorType, contextData) => {
                 const { righe_schermature } = params;
                 if (!righe_schermature || !Array.isArray(righe_schermature) || righe_schermature.length === 0) return 0;
 
@@ -1366,14 +1367,36 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                     const costo_specifico = costo_totale / superficie;
                     const costoEffettivo = Math.min(costo_specifico, tipologiaData.cmax);
-                    
+
                     let incentivoRiga = percentuale * costoEffettivo * superficie;
-                    
+
                     incentivoTotale += Math.min(incentivoRiga, tipologiaData.imax);
                 });
-                
+
                 return incentivoTotale;
             },
+
+            // getImas: intervention-level cap (kept infinite unless specified)
+            getImas: (params, operatorType, contextData) => {
+                return Number.POSITIVE_INFINITY;
+            },
+
+            // calculate: delegate to central helper (final = min(Itot, Imas, MassimaleSoggetto))
+            calculate: (params, operatorType, contextData) => {
+                if (calculatorData && typeof calculatorData.computeFinalForIntervention === 'function') {
+                    const out = calculatorData.computeFinalForIntervention('schermature-solari', params, operatorType, contextData);
+                    return out ? out.finale : 0;
+                }
+
+                const Itot = (calculatorData && calculatorData.interventions && calculatorData.interventions['schermature-solari'] && typeof calculatorData.interventions['schermature-solari'].computeItot === 'function')
+                    ? calculatorData.interventions['schermature-solari'].computeItot(params, operatorType, contextData)
+                    : 0;
+                const Imas = (calculatorData && calculatorData.interventions && calculatorData.interventions['schermature-solari'] && typeof calculatorData.interventions['schermature-solari'].getImas === 'function')
+                    ? calculatorData.interventions['schermature-solari'].getImas(params, operatorType, contextData)
+                    : Number.POSITIVE_INFINITY;
+                return Math.min(Itot, Imas);
+            },
+
             explain: (params, operatorType, contextData) => {
                 const { righe_schermature } = params;
                 if (!righe_schermature || !Array.isArray(righe_schermature) || righe_schermature.length === 0) {
@@ -1396,6 +1419,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const p = det.p;
                 const pDesc = det.pDesc;
                 const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
+
                 const steps = [];
                 let incentivoTotale = 0;
 
@@ -1438,14 +1462,38 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     steps.push(`---`);
                 });
 
+                // Intervention-level Imas (here kept infinite unless specified)
+                const imas = (calculatorData && calculatorData.interventions && typeof calculatorData.interventions['schermature-solari'].getImas === 'function')
+                    ? calculatorData.interventions['schermature-solari'].getImas(params, operatorType, contextData)
+                    : Number.POSITIVE_INFINITY;
+
+                // Compute subject-level cap (Massimale Soggetto)
+                const sog = (typeof calculatorData.getMassimaleSoggetto === 'function')
+                    ? calculatorData.getMassimaleSoggetto('schermature-solari', params, operatorType, contextData || {})
+                    : { massimale: Number.POSITIVE_INFINITY, finalPct: null, appliedPremiums: [] };
+                const MassimaleSoggetto = sog.massimale || Number.POSITIVE_INFINITY;
+
+                const finale = Math.min(incentivoTotale, imas, MassimaleSoggetto);
+
+                if (MassimaleSoggetto !== Number.POSITIVE_INFINITY) {
+                    steps.push(`Totale = ${calculatorData.formatNumber(incentivoTotale,2)} €`);
+                    steps.push(`Massimale soggetto = ${calculatorData.formatNumber(MassimaleSoggetto,2)} € (pct=${calculatorData.formatNumber((sog.finalPct||0)*100,2)}%)`);
+                    steps.push(`Finale = min(${calculatorData.formatNumber(incentivoTotale,2)}, ${calculatorData.formatNumber(imas,0)}, ${calculatorData.formatNumber(MassimaleSoggetto,2)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                } else {
+                    steps.push(`Finale = min(${calculatorData.formatNumber(incentivoTotale,2)}, ${calculatorData.formatNumber(imas,0)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                }
+
                 return {
-                    result: incentivoTotale,
-                    formula: `Itot = Σ [min(p × min(Ci, Cmax,i) × Sint,i × UE, Imas,i)]`,
+                    result: finale,
+                    formula: `Itot = Σ [min(p × min(Ci, Cmax,i) × Sint,i, Imas_i)]`,
                     variables: {
                         NumeroRighe: righe_schermature.length,
                         p: pDesc,
                         p_value: p,
                         UE: ueSelected,
+                        Imas: imas,
+                        MassimaleSoggetto_pct: (sog && typeof sog.finalPct === 'number') ? (calculatorData.formatNumber((sog.finalPct||0)*100,2) + ' %') : null,
+                        MassimaleSoggetto_premialita: (sog.appliedPremiums || []).map(p=> `${p.name} (+${Math.round((p.addedPct||0)*100)} pp)`)
                     },
                     steps
                 };
