@@ -955,8 +955,18 @@ async function initCalculator() {
         state.inputValues = {};
         updateDynamicInputs();
 
+        // Ensure the global zona climatica selector exists (creates it if missing)
+        try { ensureGlobalZonaClimatica(); } catch (e) { /* ignore */ }
+
+        // Require operator type (steps 1-2) before showing interventions
         if (!state.selectedOperator) {
             interventionsList.innerHTML = '<p class="notice">Completa i passi 1 e 2 per visualizzare gli interventi disponibili.</p>';
+            return;
+        }
+
+        // Require a site-level zona climatica before allowing the user to pick interventions
+        if (!state.subjectSpecificData || !state.subjectSpecificData.zona_climatica) {
+            interventionsList.innerHTML = '<p class="notice">Seleziona la <strong>zona climatica</strong> dell\'edificio prima di scegliere gli interventi.</p>';
             return;
         }
 

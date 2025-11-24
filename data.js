@@ -1665,34 +1665,57 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     help: 'Inserisci una riga per ogni tipologia di lampada. Puoi aggiungere più tipologie.'
                 }
             ],
-            calculate: (params, operatorType, contextData) => {
-                const { righe_illuminazione } = params;
+            // computeItot: theoretical total incentive (without applying per-row Imas or MassimaleSoggetto)
+            computeItot: (params, operatorType, contextData) => {
+                const { righe_illuminazione } = params || {};
                 if (!righe_illuminazione || !Array.isArray(righe_illuminazione) || righe_illuminazione.length === 0) return 0;
-
-                let incentivoTotale = 0;
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'illuminazione-led');
-                const percentuale = det.p;
-
+                const p = det.p;
+                let Itot = 0;
+                const options = [
+                    { value: 'Alta efficienza', cmax: 15, imax: 50000 },
+                    { value: 'LED', cmax: 35, imax: 140000 }
+                ];
                 righe_illuminazione.forEach(riga => {
-                    const { tipo_lampada, superficie, costo_totale } = riga;
-                    if (!tipo_lampada || !superficie || !costo_totale || superficie <= 0) return 0;
-
-                    const tipologiaData = [
-                        { value: 'Alta efficienza', cmax: 15, imax: 50000 },
-                        { value: 'LED', cmax: 35, imax: 140000 }
-                    ].find(t => t.value === tipo_lampada);
-
-                    if (!tipologiaData) return 0;
-
+                    const { tipo_lampada, superficie, costo_totale } = riga || {};
+                    if (!tipo_lampada || !superficie || !costo_totale || superficie <= 0) return;
+                    const tipologiaData = options.find(t => t.value === tipo_lampada);
+                    if (!tipologiaData) return;
                     const costo_specifico = costo_totale / superficie;
                     const costoEffettivo = Math.min(costo_specifico, tipologiaData.cmax);
-                    
-                    let incentivoRiga = percentuale * costoEffettivo * superficie;
-                    
-                    incentivoTotale += Math.min(incentivoRiga, tipologiaData.imax);
+                    Itot += p * costoEffettivo * superficie;
                 });
-                
-                return incentivoTotale;
+                return Itot;
+            },
+
+            // getImas: intervention-level cap computed as sum of per-row imax
+            getImas: (params, operatorType, contextData) => {
+                const { righe_illuminazione } = params || {};
+                if (!righe_illuminazione || !Array.isArray(righe_illuminazione) || righe_illuminazione.length === 0) return Number.POSITIVE_INFINITY;
+                const imaxMap = { 'Alta efficienza': 50000, 'LED': 140000 };
+                let total = 0;
+                righe_illuminazione.forEach(r => {
+                    const t = r && r.tipo_lampada;
+                    if (!t) return;
+                    total += imaxMap[t] || 0;
+                });
+                return total;
+            },
+
+            // calculate: delegate to central helper (final = min(Itot, Imas, MassimaleSoggetto))
+            calculate: (params, operatorType, contextData) => {
+                if (calculatorData && typeof calculatorData.computeFinalForIntervention === 'function') {
+                    const out = calculatorData.computeFinalForIntervention('illuminazione-led', params, operatorType, contextData);
+                    return out ? out.finale : 0;
+                }
+
+                const Itot = (calculatorData && calculatorData.interventions && calculatorData.interventions['illuminazione-led'] && typeof calculatorData.interventions['illuminazione-led'].computeItot === 'function')
+                    ? calculatorData.interventions['illuminazione-led'].computeItot(params, operatorType, contextData)
+                    : 0;
+                const Imas = (calculatorData && calculatorData.interventions && calculatorData.interventions['illuminazione-led'] && typeof calculatorData.interventions['illuminazione-led'].getImas === 'function')
+                    ? calculatorData.interventions['illuminazione-led'].getImas(params, operatorType, contextData)
+                    : Number.POSITIVE_INFINITY;
+                return Math.min(Itot, Imas);
             },
             explain: (params, operatorType, contextData) => {
                 const { righe_illuminazione } = params;
@@ -1714,14 +1737,17 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const p = det.p;
                 const pDesc = det.pDesc;
                 const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
+
                 const steps = [];
                 let incentivoTotale = 0;
+
                 steps.push(`Percentuale incentivazione: ${pDesc}`);
                 steps.push(ueSelected ? `Premio Prodotti UE: incluso nella percentuale di incentivazione` : `Premio UE: non applicato`);
                 steps.push(`---`);
 
+                // Recompute per-row details for human-readable steps (show C/Cmax/Ceff and per-row eventual cap application)
                 righe_illuminazione.forEach((riga, index) => {
-                    const { tipo_lampada, superficie, costo_totale } = riga;
+                    const { tipo_lampada, superficie, costo_totale } = riga || {};
                     if (!tipo_lampada || !superficie || !costo_totale || superficie <= 0) {
                         steps.push(`Riga ${index + 1}: dati incompleti`);
                         return;
@@ -1738,16 +1764,16 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     const costoEffettivo = Math.min(costo_specifico, cmax);
                     const superaMassimaleC = costo_specifico > cmax;
 
-                    let incentivoRigaBase = p * costoEffettivo * superficie;
-                    let incentivoRigaFinale = Math.min(incentivoRigaBase, imax);
+                    const incentivoRigaBase = p * costoEffettivo * superficie;
+                    const incentivoRigaFinale = Math.min(incentivoRigaBase, imax);
                     incentivoTotale += incentivoRigaFinale;
 
                     steps.push(`Riga ${index + 1}: ${tipologiaLabel}`);
                     steps.push(`  Superficie: ${calculatorData.formatNumber(superficie, 2)} m²`);
                     steps.push(`  Costo totale: ${calculatorData.formatNumber(costo_totale)} €`);
                     steps.push(`  C = ${calculatorData.formatNumber(costo_totale)} / ${calculatorData.formatNumber(superficie, 2)} = ${calculatorData.formatNumber(costo_specifico, 2)} €/m²`);
-                    steps.push(superaMassimaleC 
-                        ? `  ⚠️  Costo specifico (${calculatorData.formatNumber(costo_specifico,2)} €/m²) supera Cmax (${calculatorData.formatNumber(cmax,2)} €/m²)! Uso Cmax.` 
+                    steps.push(superaMassimaleC
+                        ? `  ⚠️  Costo specifico (${calculatorData.formatNumber(costo_specifico,2)} €/m²) supera Cmax (${calculatorData.formatNumber(cmax,2)} €/m²)! Uso Cmax.`
                         : `  ✓ Costo specifico (${calculatorData.formatNumber(costo_specifico,2)} €/m²) ≤ Cmax (${calculatorData.formatNumber(cmax,2)} €/m²)`
                     );
                     steps.push(`  Incentivo riga base = ${calculatorData.formatNumber(p,2)} × ${calculatorData.formatNumber(costoEffettivo,2)} × ${calculatorData.formatNumber(superficie,2)} = ${calculatorData.formatNumber(incentivoRigaBase,2)} €`);
@@ -1755,14 +1781,38 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     steps.push(`---`);
                 });
 
+                // Intervention-level Imas (sum of per-row imax)
+                const imas = (calculatorData && calculatorData.interventions && typeof calculatorData.interventions['illuminazione-led'].getImas === 'function')
+                    ? calculatorData.interventions['illuminazione-led'].getImas(params, operatorType, contextData)
+                    : Number.POSITIVE_INFINITY;
+
+                // Compute subject-level cap (Massimale Soggetto)
+                const sog = (typeof calculatorData.getMassimaleSoggetto === 'function')
+                    ? calculatorData.getMassimaleSoggetto('illuminazione-led', params, operatorType, contextData || {})
+                    : { massimale: Number.POSITIVE_INFINITY, finalPct: null, appliedPremiums: [] };
+                const MassimaleSoggetto = sog.massimale || Number.POSITIVE_INFINITY;
+
+                const finale = Math.min(incentivoTotale, imas, MassimaleSoggetto);
+
+                if (MassimaleSoggetto !== Number.POSITIVE_INFINITY) {
+                    steps.push(`Totale = ${calculatorData.formatNumber(incentivoTotale,2)} €`);
+                    steps.push(`Massimale soggetto = ${calculatorData.formatNumber(MassimaleSoggetto,2)} € (pct=${calculatorData.formatNumber((sog.finalPct||0)*100,2)}%)`);
+                    steps.push(`Finale = min(${calculatorData.formatNumber(incentivoTotale,2)}, ${calculatorData.formatNumber(imas,0)}, ${calculatorData.formatNumber(MassimaleSoggetto,2)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                } else {
+                    steps.push(`Finale = min(${calculatorData.formatNumber(incentivoTotale,2)}, ${calculatorData.formatNumber(imas,0)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                }
+
                 return {
-                    result: incentivoTotale,
+                    result: finale,
                     formula: `Itot = Σ [min(p × min(Ci, Cmax,i) × Sint,i × UE, Imas,i)]`,
                     variables: {
                         NumeroRighe: righe_illuminazione.length,
                         p: pDesc,
                         p_value: p,
                         UE: ueSelected,
+                        Imas: imas,
+                        MassimaleSoggetto_pct: (sog && typeof sog.finalPct === 'number') ? (calculatorData.formatNumber((sog.finalPct||0)*100,2) + ' %') : null,
+                        MassimaleSoggetto_premialita: (sog.appliedPremiums || []).map(p=> `${p.name} (+${Math.round((p.addedPct||0)*100)} pp)`)
                     },
                     steps
                 };
@@ -1779,48 +1829,89 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0 },
                 { id: 'costo_specifico', name: 'Costo specifico C (€/m²)', type: 'computed', compute: (params) => params.superficie > 0 ? Number((params.costo_totale / params.superficie).toFixed(2)) : 0 }
             ],
-            calculate: (params, operatorType, contextData) => {
-                const { superficie, costo_specifico } = params;
-                // Treat numeric zero as valid; only bail out when missing (undefined/null)
+            // computeItot: theoretical total incentive (without applying Imas or MassimaleSoggetto)
+            computeItot: (params, operatorType, contextData) => {
+                const { superficie, costo_specifico } = params || {};
                 if (!superficie || costo_specifico === undefined || costo_specifico === null) return 0;
-                
-                // Formula: Itot = %spesa × C × Sed, con Itot ≤ Imas
                 const cmax = 60; // €/m²
-                const imax = 100000; // €
-                
                 const costoEffettivo = Math.min(costo_specifico, cmax);
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'building-automation');
-                const percentuale = det.p;
-
-                let incentivo = percentuale * costoEffettivo * superficie;
-
-                return Math.min(incentivo, imax);
+                return det.p * costoEffettivo * superficie;
             },
+
+            // getImas: fixed intervention-level cap
+            getImas: (params, operatorType, contextData) => {
+                return 100000; // €
+            },
+
+            // calculate: delegate to central helper to compute final = min(Itot, Imas, MassimaleSoggetto)
+            calculate: (params, operatorType, contextData) => {
+                if (calculatorData && typeof calculatorData.computeFinalForIntervention === 'function') {
+                    const out = calculatorData.computeFinalForIntervention('building-automation', params, operatorType, contextData || {});
+                    return out ? out.finale : 0;
+                }
+
+                const Itot = (calculatorData && calculatorData.interventions && calculatorData.interventions['building-automation'] && typeof calculatorData.interventions['building-automation'].computeItot === 'function')
+                    ? calculatorData.interventions['building-automation'].computeItot(params, operatorType, contextData)
+                    : 0;
+                const Imas = (calculatorData && calculatorData.interventions && calculatorData.interventions['building-automation'] && typeof calculatorData.interventions['building-automation'].getImas === 'function')
+                    ? calculatorData.interventions['building-automation'].getImas(params, operatorType, contextData)
+                    : Number.POSITIVE_INFINITY;
+                return Math.min(Itot, Imas);
+            },
+
             explain: (params, operatorType, contextData) => {
-                const { superficie, costo_specifico } = params;
-                const cmax = 60, imax = 100000;
+                const { superficie, costo_specifico } = params || {};
+                const cmax = 60, imas = 100000;
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'building-automation');
                 const p = det.p;
                 const pDesc = det.pDesc;
-                const Ceff = Math.min(costo_specifico || 0, cmax);
-                const base = p * Ceff * (superficie || 0);
-                const finale = Math.min(base, imax);
+                const C = Number(costo_specifico || 0);
+                const Ceff = Math.min(C, cmax);
+                const Itot = p * Ceff * (superficie || 0);
 
-                // Verifica se l'utente ha selezionato il premio Prodotti UE (solo per spiegazione)
+                // Premio Prodotti UE flag (for explanation only)
                 const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
+
+                // Compute subject-level cap
+                const sog = (typeof calculatorData.getMassimaleSoggetto === 'function')
+                    ? calculatorData.getMassimaleSoggetto('building-automation', params, operatorType, contextData || {})
+                    : { massimale: Number.POSITIVE_INFINITY, finalPct: null, appliedPremiums: [] };
+                const MassimaleSoggetto = sog.massimale || Number.POSITIVE_INFINITY;
+
+                const finale = Math.min(Itot, imas, MassimaleSoggetto);
 
                 const steps = [];
                 steps.push(`Percentuale incentivazione: ${pDesc}`);
-                steps.push(ueSelected ? `UE: premio UE applicato e incluso nella percentuale (p=${calculatorData.formatNumber(p,2)})` : `UE: non applicata`);
-                steps.push(`Ceff=min(${calculatorData.formatNumber(costo_specifico,2)}, ${cmax})=${calculatorData.formatNumber(Ceff,2)}`);
-                steps.push(`Base=${calculatorData.formatNumber(p,2)}×${calculatorData.formatNumber(Ceff,2)}×${calculatorData.formatNumber(superficie,2)}=${calculatorData.formatNumber(base,2)}`);
-                steps.push(`Finale=min(${calculatorData.formatNumber(base,2)}, ${calculatorData.formatNumber(imax)})=${calculatorData.formatNumber(finale,2)}`);
+                steps.push(ueSelected ? `Premio Prodotti UE: incluso nella percentuale di incentivazione` : `Premio UE: non applicato`);
+                steps.push(`Cmax = ${calculatorData.formatNumber(cmax,2)} €/m²`);
+                steps.push(`C = ${calculatorData.formatNumber(C,2)} €/m²`);
+                if (C > cmax) steps.push(`⚠️ C supera Cmax! Uso Cmax=${calculatorData.formatNumber(cmax,2)} €/m²`);
+                steps.push(`Ceff = min(${calculatorData.formatNumber(C,2)}, ${calculatorData.formatNumber(cmax,2)}) = ${calculatorData.formatNumber(Ceff,2)} €/m²`);
+                steps.push(`Itot = ${calculatorData.formatNumber(p,4)} × ${calculatorData.formatNumber(Ceff,2)} × ${calculatorData.formatNumber(superficie||0,2)} = ${calculatorData.formatNumber(Itot,2)} €`);
+                steps.push(`Imas (massimale per intervento) = ${calculatorData.formatNumber(imas,0)} €`);
+
+                if (MassimaleSoggetto !== Number.POSITIVE_INFINITY) {
+                    steps.push(`Massimale soggetto = ${calculatorData.formatNumber(MassimaleSoggetto,2)} € (pct=${calculatorData.formatNumber((sog.finalPct||0)*100,2)}%)`);
+                    steps.push(`Finale = min(${calculatorData.formatNumber(Itot,2)}, ${calculatorData.formatNumber(imas,0)}, ${calculatorData.formatNumber(MassimaleSoggetto,2)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                } else {
+                    steps.push(`Finale = min(${calculatorData.formatNumber(Itot,2)}, ${calculatorData.formatNumber(imas,0)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                }
 
                 return {
                     result: finale,
-                    formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected ? ' (premio UE incluso nella percentuale)' : ''}; Imas=${calculatorData.formatNumber(imax)}€`,
-                    // unify p and pDesc: present only `p` as descriptive string; keep numeric in `p_value` for programmatic use
-                    variables: { p: pDesc, p_value: p, C: (costo_specifico||0) ? (calculatorData.formatNumber(costo_specifico,2) + ' €/m²') : 0, Ceff: Ceff ? (calculatorData.formatNumber(Ceff,2) + ' €/m²') : 0, Sed: superficie||0, Imas: calculatorData.formatCurrency(imax,0), UE: ueSelected },
+                    formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected ? ' (premio UE incluso nella percentuale)' : ''}`,
+                    variables: {
+                        p: pDesc,
+                        p_value: p,
+                        C: C,
+                        Ceff: Ceff,
+                        Sed: superficie || 0,
+                        UE: ueSelected,
+                        Imas: imas,
+                        MassimaleSoggetto_pct: (sog && typeof sog.finalPct === 'number') ? (calculatorData.formatNumber((sog.finalPct||0)*100,2) + ' %') : null,
+                        MassimaleSoggetto_premialita: (sog.appliedPremiums || []).map(p=> `${p.name} (+${Math.round((p.addedPct||0)*100)} pp)`)
+                    },
                     steps
                 };
             }
@@ -1858,15 +1949,10 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 },
                 { id: 'costo_totale', name: 'Costo totale sostenuto (€)', type: 'number', min: 0 }
             ],
-            calculate: (params, operatorType, contextData) => {
-                const { tipo_infrastruttura, numero_punti, potenza, costo_totale } = params;
-                // Treat numeric 0 as a valid entered value. Only bail out when the value
-                // is actually missing (undefined/null). This allows users to enter 0
-                // or edit the field freely without being blocked by an early return.
+            computeItot: (params, operatorType, contextData) => {
+                const { tipo_infrastruttura, numero_punti, potenza, costo_totale } = params || {};
                 if (costo_totale === undefined || costo_totale === null) return 0;
-
-                // Limiti massimi di costo secondo Art. 5.1.g
-                let costoMassimoAmmissibile;
+                let costoMassimoAmmissibile = 0;
                 switch(tipo_infrastruttura) {
                     case 'Standard monofase (7.4-22kW)': {
                         const n = parseInt(numero_punti, 10) || 0;
@@ -1885,36 +1971,40 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     default:
                         costoMassimoAmmissibile = 0;
                 }
-
-                const spesaAmmissibile = Math.min(costo_totale, costoMassimoAmmissibile);
-
-                // Determina la percentuale centralizzata (include eventuale premio Prodotti UE e regole multi-intervento)
+                const spesaAmmissibile = Math.min(Number(costo_totale) || 0, costoMassimoAmmissibile);
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'infrastrutture-ricarica');
-                const percentuale = det.p;
-
-                // Incentivo = p × spesa ammissibile
-                let incentivo = percentuale * spesaAmmissibile;
-
-                // Note: "incentivo comunque non superiore a quello per pompe di calore elettriche"
-                // Per ora lasciamo solo la formula base
-
-                return incentivo;
+                return (det && typeof det.p === 'number') ? det.p * spesaAmmissibile : 0;
+            },
+            getImas: (params, operatorType, contextData) => {
+                // No explicit intervention-level monetary cap beyond Cmax on costs; treat Imas as infinite
+                return Number.POSITIVE_INFINITY;
+            },
+            calculate: (params, operatorType, contextData) => {
+                if (calculatorData && typeof calculatorData.computeFinalForIntervention === 'function') {
+                    const out = calculatorData.computeFinalForIntervention('infrastrutture-ricarica', params, operatorType, contextData || {});
+                    return out.finale;
+                }
+                // Fallback
+                const it = (typeof calculatorData.interventions['infrastrutture-ricarica'].computeItot === 'function') ? calculatorData.interventions['infrastrutture-ricarica'].computeItot(params, operatorType, contextData) : 0;
+                return it;
             },
             explain: (params, operatorType, contextData) => {
-                const { tipo_infrastruttura, numero_punti, potenza, costo_totale } = params;
+                const { tipo_infrastruttura, numero_punti, potenza, costo_totale } = params || {};
                 let costoMassimoAmmissibile = 0;
                 const steps = [];
 
-                // Determina percentuale centralmente (include eventuale premio Prodotti UE)
+                // Compute Itot and Imas via helpers for consistency
+                const Itot = (typeof calculatorData.interventions['infrastrutture-ricarica'].computeItot === 'function') ? calculatorData.interventions['infrastrutture-ricarica'].computeItot(params, operatorType, contextData) : 0;
+                const Imas = (typeof calculatorData.interventions['infrastrutture-ricarica'].getImas === 'function') ? calculatorData.interventions['infrastrutture-ricarica'].getImas(params, operatorType, contextData) : Number.POSITIVE_INFINITY;
+
+                // Determine percentuale for display
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'infrastrutture-ricarica');
                 const percentuale = det.p;
                 const percentualeDesc = det.pDesc;
 
-                // Verifica se l'utente ha selezionato il premio Prodotti UE (solo per spiegazione)
                 const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
 
                 steps.push(`Percentuale incentivazione: ${percentualeDesc}`);
-               // steps.push(ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${percentuale.toFixed(2)})` : `  Premio Prodotti UE: non applicato`);
                 steps.push(`---`);
 
                 switch(tipo_infrastruttura) {
@@ -1940,12 +2030,26 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     case 'Oltre 100kW': costoMassimoAmmissibile = 110000; steps.push(`Cmax = 110.000 € per infrastruttura`); break;
                     default: costoMassimoAmmissibile = 0; steps.push(`Tipo non selezionato`);
                 }
+
                 const spesa = parseFloat(costo_totale || 0) || 0;
                 const spesaAmmissibile = Math.min(spesa, costoMassimoAmmissibile);
-                const incentivo = percentuale * spesaAmmissibile;
                 steps.push(`Spesa ammissibile = min(Spesa, Cmax) = min(${calculatorData.formatNumber(spesa)}, ${calculatorData.formatNumber(costoMassimoAmmissibile)}) = ${calculatorData.formatNumber(spesaAmmissibile)}`);
-                steps.push(`Itot = p × Spesa ammissibile = ${calculatorData.formatNumber(percentuale,4)} × ${calculatorData.formatNumber(spesaAmmissibile)} = ${calculatorData.formatNumber(incentivo,2)} €`);
-                return { result: incentivo, formula:`Itot = p × min(Spesa, Cmax)${ueSelected ? ' (Prodotti UE inclusi nella percentuale)' : ''}`, variables:{ Spesa: spesa, Cmax: costoMassimoAmmissibile, SpesaAmm: spesaAmmissibile, p: percentualeDesc, p_value: percentuale, UE: ueSelected }, steps };
+                steps.push(`Itot = p × Spesa ammissibile = ${calculatorData.formatNumber(percentuale,4)} × ${calculatorData.formatNumber(spesaAmmissibile)} = ${calculatorData.formatNumber(Itot,2)} €`);
+
+                const sog = (typeof calculatorData.getMassimaleSoggetto === 'function') ? calculatorData.getMassimaleSoggetto('infrastrutture-ricarica', params, operatorType, contextData || {}) : { massimale: 0 };
+                const MassimaleSoggetto = sog.massimale || 0;
+                if (MassimaleSoggetto > 0) {
+                    steps.push(`Massimale soggetto (pct): ${calculatorData.formatNumber((sog.finalPct||0)*100,2)}%`);
+                    steps.push(`Massimale soggetto - premialità applicate: ${(sog.appliedPremiums||[]).map(p=> `${p.name} (+${Math.round((p.addedPct||0)*100)} pp)`).join(', ')}`);
+                    const finale = Math.min(Itot, Imas, MassimaleSoggetto);
+                    steps.push(`Finale = min(${calculatorData.formatNumber(Itot,2)}, ${calculatorData.formatNumber(Imas,0)}, ${calculatorData.formatNumber(MassimaleSoggetto,2)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                    return { result: finale, formula:`Itot = p × min(Spesa, Cmax)${ueSelected ? ' (Prodotti UE inclusi nella percentuale)' : ''}`, variables:{ Spesa: spesa, Cmax: costoMassimoAmmissibile, SpesaAmm: spesaAmmissibile, p: percentualeDesc, p_value: percentuale, UE: ueSelected, Imas: Imas, MassimaleSoggetto_pct: (sog && typeof sog.finalPct === 'number') ? (calculatorData.formatNumber((sog.finalPct||0)*100,2) + ' %') : null, MassimaleSoggetto_premialita: (sog.appliedPremiums || []).map(p=> `${p.name} (+${Math.round((p.addedPct||0)*100)} pp)`) }, steps };
+                }
+
+                // No subject-level cap
+                const finaleNoSog = Math.min(Itot, Imas);
+                steps.push(`Finale = min(${calculatorData.formatNumber(Itot,2)}, ${calculatorData.formatNumber(Imas,0)}) = ${calculatorData.formatNumber(finaleNoSog,2)} €`);
+                return { result: finaleNoSog, formula:`Itot = p × min(Spesa, Cmax)${ueSelected ? ' (Prodotti UE inclusi nella percentuale)' : ''}`, variables:{ Spesa: spesa, Cmax: costoMassimoAmmissibile, SpesaAmm: spesaAmmissibile, p: percentualeDesc, p_value: percentuale, UE: ueSelected, Imas: Imas }, steps };
             }
         },
         'fotovoltaico-accumulo': {
@@ -1960,27 +2064,23 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 { id: 'registro_ue', name: 'Moduli FV iscritti al registro UE', type: 'select', options: ['No', 'Sì - Requisiti lett. a) (+5%)', 'Sì - Requisiti lett. b) (+10%)', 'Sì - Requisiti lett. c) (+15%)'] },
                 { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0, optional: true, help: 'Se fornito, verrà usato per confrontare con i massimali e determinare la spesa ammissibile.' }
             ],
-            calculate: (params, operatorType, contextData) => {
-                const { potenza_fv, capacita_accumulo, registro_ue, costo_totale } = params;
+            computeItot: (params, operatorType, contextData) => {
+                const { potenza_fv, capacita_accumulo, registro_ue, costo_totale } = params || {};
                 const p = Number(potenza_fv || 0);
                 const k = Number(capacita_accumulo || 0);
-
                 if (p <= 0 && k <= 0) return 0;
 
-                // Cmax per fasce indicate dal decreto (€/kW)
                 let cmaxFVPerkW;
-                // Enforce regulatory cap: no incentives for potenze > 1000 kWp
                 if (p > 1000) return 0;
                 if (p <= 20) cmaxFVPerkW = 1500;
                 else if (p <= 200) cmaxFVPerkW = 1200;
                 else if (p <= 600) cmaxFVPerkW = 1100;
-                else /* p <= 1000 */ cmaxFVPerkW = 1050;
+                else cmaxFVPerkW = 1050;
 
                 const massimaleFV = p * cmaxFVPerkW;
-                const massimaleAccumulo = k * 1000; // 1000 €/kWh per accumulo
+                const massimaleAccumulo = k * 1000;
                 const totaleMassimali = massimaleFV + massimaleAccumulo;
 
-                // Registro UE: incrementa la percentuale (non i massimali) secondo la lettera a/b/c
                 let registroAdd = 0;
                 if (registro_ue && typeof registro_ue === 'string') {
                     if (registro_ue.includes('lett. a)')) registroAdd = 0.05;
@@ -1988,26 +2088,29 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     else if (registro_ue.includes('lett. c)')) registroAdd = 0.15;
                 }
 
-                // Percentuale base per questo intervento: 20% (salvo Art.48-ter / piccolo comune => 100%)
                 const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
-                // Nota: per il fotovoltaico-accumulo NON applichiamo il 100% per i piccoli comuni; resta valido solo Art.48-ter
                 const basePercentuale = isArt48ter ? 1.0 : 0.20;
                 const percentualeApplicata = isArt48ter ? 1.0 : (basePercentuale + registroAdd);
 
-                // Spesa totale: preferiamo il costo reale se fornito, altrimenti stimiamo dalla somma delle componenti massimali
                 const spesaTotale = (typeof costo_totale === 'number' && !isNaN(costo_totale) && costo_totale > 0) ? costo_totale : totaleMassimali;
-
-                // Applicazione della regola: incentivo = percentualeApplicata × min(SpesaTotale, TotaleMassimali)
                 const spesaUsata = Math.min(spesaTotale, totaleMassimali);
-                const incentivo = percentualeApplicata * spesaUsata;
-
-                return incentivo;
+                return percentualeApplicata * spesaUsata;
+            },
+            getImas: (params, operatorType, contextData) => {
+                // No specific monetary cap beyond eligible massimali; treat as infinite
+                return Number.POSITIVE_INFINITY;
+            },
+            calculate: (params, operatorType, contextData) => {
+                if (calculatorData && typeof calculatorData.computeFinalForIntervention === 'function') {
+                    const out = calculatorData.computeFinalForIntervention('fotovoltaico-accumulo', params, operatorType, contextData || {});
+                    return out.finale;
+                }
+                return (typeof calculatorData.interventions['fotovoltaico-accumulo'].computeItot === 'function') ? calculatorData.interventions['fotovoltaico-accumulo'].computeItot(params, operatorType, contextData) : 0;
             },
             explain: (params, operatorType, contextData) => {
-                const { potenza_fv, capacita_accumulo, registro_ue, costo_totale } = params;
+                const { potenza_fv, capacita_accumulo, registro_ue, costo_totale } = params || {};
                 const p = Number(potenza_fv || 0);
                 const k = Number(capacita_accumulo || 0);
-
                 const steps = [];
 
                 // Cmax per fascia
@@ -2017,13 +2120,12 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 else if (p <= 600) cmaxFVPerkW = 1100;
                 else cmaxFVPerkW = 1050;
 
-                // Registro UE incrementa la percentuale (non i massimali)
+                // Registro UE
                 let registroAdd = 0;
-                let registroNote = 'No registro UE selezionato';
                 if (registro_ue && typeof registro_ue === 'string') {
-                    if (registro_ue.includes('lett. a)')) { registroAdd = 0.05; registroNote = 'Registro UE lett. a) (+5%)'; }
-                    else if (registro_ue.includes('lett. b)')) { registroAdd = 0.10; registroNote = 'Registro UE lett. b) (+10%)'; }
-                    else if (registro_ue.includes('lett. c)')) { registroAdd = 0.15; registroNote = 'Registro UE lett. c) (+15%)'; }
+                    if (registro_ue.includes('lett. a)')) { registroAdd = 0.05; }
+                    else if (registro_ue.includes('lett. b)')) { registroAdd = 0.10; }
+                    else if (registro_ue.includes('lett. c)')) { registroAdd = 0.15; }
                 }
 
                 const massimaleFV = p * cmaxFVPerkW;
@@ -2031,55 +2133,72 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const totaleMassimali = massimaleFV + massimaleAccumulo;
 
                 const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
-                // Piccolo comune non modifica la percentuale per 1.H nello explain; solo Art.48-ter imposta 100%
                 const basePercentuale = isArt48ter ? 1.0 : 0.20;
                 const percentualeApplicata = isArt48ter ? 1.0 : (basePercentuale + registroAdd);
                 const pDesc = (percentualeApplicata === 1.0) ? '100% (Art.48-ter)' : `${calculatorData.formatNumber((basePercentuale+registroAdd)*100,0)}% (base 20% + registro)`;
 
-                // Costruzione dei passi esplicativi
                 steps.push(`Potenza FV (kWp): ${p}`);
                 steps.push(`Capacità accumulo (kWh): ${k}`);
                 steps.push(`Massimale FV (€/kW): ${cmaxFVPerkW}`);
                 steps.push(`Massimale accumulo (€/kWh): 1000`);
                 if (registroAdd > 0) steps.push(`Registro UE: ${registro_ue} (incrementa la percentuale di ${calculatorData.formatNumber(registroAdd*100,0)} punti percentuali)`);
 
-                // Spesa ammissibile considerata
                 const costoFatturato = (typeof costo_totale === 'number' && !isNaN(costo_totale) && costo_totale > 0) ? costo_totale : totaleMassimali;
                 const spesaUsataFinale = Math.min(costoFatturato, totaleMassimali);
 
-                // Dettagli per i passi esplicativi
-                //steps.push(`Cmax base FV = ${cmaxFVPerkW} €/kWp`);
                 steps.push(`Massimale FV = ${calculatorData.formatNumber(p)} × ${calculatorData.formatNumber(cmaxFVPerkW)} = ${calculatorData.formatNumber(massimaleFV)} €`);
                 steps.push(`Massimale accumulo = ${calculatorData.formatNumber(k)} kWh × 1000 €/kWh = ${calculatorData.formatNumber(massimaleAccumulo)} €`);
                 steps.push(`Totale massimali = ${calculatorData.formatNumber(totaleMassimali)} €`);
                 steps.push(typeof costo_totale === 'number' && costo_totale > 0 ? `Costo fatturato fornito = ${calculatorData.formatNumber(costo_totale)} €` : `Nessun costo fatturato fornito; si assume spesa ammissibile = massimali`);
                 steps.push(`Costo usata per calcolo = min(Costo fatturato, Totale massimali) = ${calculatorData.formatNumber(spesaUsataFinale)} €`);
                 steps.push(`Percentuale applicata: ${pDesc}`);
-                steps.push(`Itot = p × Spesa usata = ${calculatorData.formatNumber(percentualeApplicata,2)} × ${calculatorData.formatNumber(spesaUsataFinale)} = ${calculatorData.formatNumber(percentualeApplicata*spesaUsataFinale,2)} €`);
 
-                // Requisiti tecnici e modalità di erogazione (informativi)
-                steps.push('Requisiti tecnici: moduli FV con rendimento ≥90% dopo 10 anni; inverter rendimento UE ≥97%.');
-                steps.push('Erogazione: pagamento in unica rata per importi ≤15.000 €; per importi >15.000 € possibili rate tra 2 e 5 anni.');
+                const Itot = (typeof calculatorData.interventions['fotovoltaico-accumulo'].computeItot === 'function') ? calculatorData.interventions['fotovoltaico-accumulo'].computeItot(params, operatorType, contextData) : 0;
+                const Imas = (typeof calculatorData.interventions['fotovoltaico-accumulo'].getImas === 'function') ? calculatorData.interventions['fotovoltaico-accumulo'].getImas(params, operatorType, contextData) : Number.POSITIVE_INFINITY;
+                steps.push(`Itot = p × Spesa usata = ${calculatorData.formatNumber(percentualeApplicata,2)} × ${calculatorData.formatNumber(spesaUsataFinale)} = ${calculatorData.formatNumber(Itot,2)} €`);
 
-                const incentivo = percentualeApplicata * spesaUsataFinale;
+                const sog = (typeof calculatorData.getMassimaleSoggetto === 'function') ? calculatorData.getMassimaleSoggetto('fotovoltaico-accumulo', params, operatorType, contextData || {}) : { massimale: 0 };
+                const MassimaleSoggetto = sog.massimale || 0;
+                if (MassimaleSoggetto > 0) {
+                    steps.push(`Massimale soggetto (pct): ${calculatorData.formatNumber((sog.finalPct||0)*100,2)}%`);
+                    steps.push(`Massimale soggetto - premialità applicate: ${(sog.appliedPremiums||[]).map(p=> `${p.name} (+${Math.round((p.addedPct||0)*100)} pp)`).join(', ')}`);
+                    const finale = Math.min(Itot, Imas, MassimaleSoggetto);
+                    steps.push(`Finale = min(${calculatorData.formatNumber(Itot,2)}, ${calculatorData.formatNumber(Imas,0)}, ${calculatorData.formatNumber(MassimaleSoggetto,2)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                    return {
+                        result: finale,
+                        formula: `Itot = p × min(costoFatturato, TotaleMassimali)`,
+                        variables: {
+                            potenza_fv: p,
+                            capacita_accumulo_kWh: k,
+                            costo_massimo_ammissibile_fv: calculatorData.formatNumber(cmaxFVPerkW,2) + ' €/kWp',
+                            costo_massimo_ammissibile_accumulo: calculatorData.formatNumber(1000,0) + ' €/kWh',
+                            costo_Fatturato: (typeof costo_totale === 'number' ? calculatorData.formatCurrency(costo_totale,2) : null),
+                            p: pDesc,
+                            p_value: percentualeApplicata,
+                            registro_ue: registro_ue || null,
+                            Imas: Imas,
+                            MassimaleSoggetto_pct: (sog && typeof sog.finalPct === 'number') ? (calculatorData.formatNumber((sog.finalPct||0)*100,2) + ' %') : null,
+                            MassimaleSoggetto_premialita: (sog.appliedPremiums || []).map(p=> `${p.name} (+${Math.round((p.addedPct||0)*100)} pp)`) 
+                        },
+                        steps
+                    };
+                }
 
+                const finaleNoSog = Math.min(Itot, Imas);
+                steps.push(`Finale = min(${calculatorData.formatNumber(Itot,2)}, ${calculatorData.formatNumber(Imas,0)}) = ${calculatorData.formatNumber(finaleNoSog,2)} €`);
                 return {
-                    result: incentivo,
+                    result: finaleNoSog,
                     formula: `Itot = p × min(costoFatturato, TotaleMassimali)`,
                     variables: {
                         potenza_fv: p,
                         capacita_accumulo_kWh: k,
                         costo_massimo_ammissibile_fv: calculatorData.formatNumber(cmaxFVPerkW,2) + ' €/kWp',
                         costo_massimo_ammissibile_accumulo: calculatorData.formatNumber(1000,0) + ' €/kWh',
-                       // massimaleFV: massimaleFV,
-                       // massimaleAccumulo: massimaleAccumulo,
-                       // totaleMassimali: totaleMassimali,
                         costo_Fatturato: (typeof costo_totale === 'number' ? calculatorData.formatCurrency(costo_totale,2) : null),
-                       // spesaUsata: spesaUsataFinale,
-                        // unify p/pDesc: present readable `p` and keep numeric `p_value`
                         p: pDesc,
                         p_value: percentualeApplicata,
-                        registro_ue: registro_ue || null
+                        registro_ue: registro_ue || null,
+                        Imas: Imas
                     },
                     steps
                 };
