@@ -1581,9 +1581,18 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
 
                 const steps = [];
+                // Cmax / C / warning / Ceff display to match 1.A/1.B/1.C style
+                const cmax = (['A','B','C'].includes(params?.zona_climatica)) ? 1000 : 1300;
+                const C = Number(params?.costo_specifico || 0);
+                const Ceff = Math.min(C, cmax);
+                const superaCmax = C > cmax;
                 steps.push(`Percentuale incentivazione: ${percentualeDesc}`);
                 steps.push(ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${calculatorData.formatNumber(det.p,2)})` : `  Premio Prodotti UE: non applicato`);
-                steps.push(`Totale teorico (Itot) = ${calculatorData.formatNumber(Itot,2)} €`);
+                steps.push(`Cmax = ${calculatorData.formatNumber(cmax,2)} €/m²`);
+                steps.push(`C = ${calculatorData.formatNumber(C,2)} €/m²`);
+                if (superaCmax) steps.push(`⚠️ C supera Cmax! Uso Cmax=${calculatorData.formatNumber(cmax,2)} €/m²`);
+                steps.push(`Ceff = min(${calculatorData.formatNumber(C,2)}, ${calculatorData.formatNumber(cmax,2)}) = ${calculatorData.formatNumber(Ceff,2)} €/m²`);
+                steps.push(`Itot = ${calculatorData.formatNumber(det.p,4)} × ${calculatorData.formatNumber(Ceff,2)} × ${calculatorData.formatNumber(params?.superficie||0,2)} = ${calculatorData.formatNumber(Itot,2)} €`);
                 steps.push(`Imas (massimale per intervento) = ${calculatorData.formatNumber(imas,0)} €`);
                 if (MassimaleSoggetto !== Number.POSITIVE_INFINITY) {
                     steps.push(`Massimale soggetto = ${calculatorData.formatNumber(MassimaleSoggetto,2)} € (pct=${calculatorData.formatNumber((sog.finalPct||0)*100,2)}%)`);
@@ -3351,26 +3360,18 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             }
 
         // Maggiorazioni PMI automatiche (Titolo V - Regole Applicative CT 3.0)
-        // Piccole imprese: +20% automatico
+        // Piccole imprese: +20% automatico (applicato numericamente, non mostrato come voce separata)
         if (operatorType === 'private_tertiary_small') {
             const smallCompanyBonus = sumBaseIncentives * 0.20;
             totalIncentive += smallCompanyBonus;
-            appliedGlobalPremiums.push({
-                id: 'pmi-auto-small',
-                name: 'Maggiorazione piccole imprese (+20%) - applicata automaticamente',
-                value: smallCompanyBonus
-            });
+            // intentionally do not push a separate appliedGlobalPremiums entry to avoid cluttering per-intervention details
         }
 
-        // Medie imprese: +10% automatico
+        // Medie imprese: +10% automatico (applicato numericamente, non mostrato as voce separata)
         if (operatorType === 'private_tertiary_medium') {
             const mediumCompanyBonus = sumBaseIncentives * 0.10;
             totalIncentive += mediumCompanyBonus;
-            appliedGlobalPremiums.push({
-                id: 'pmi-auto-medium',
-                name: 'Maggiorazione medie imprese (+10%) - applicata automaticamente',
-                value: mediumCompanyBonus
-            });
+            // intentionally do not push a separate appliedGlobalPremiums entry to avoid cluttering per-intervention details
         }
 
         // Diagnosi energetica: +1000€ fissi
