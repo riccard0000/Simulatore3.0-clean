@@ -3443,13 +3443,50 @@ calculatorData.getMassimaleSoggetto = function(interventionId, params, opType, c
                 if (s > 0) { costoAmmissibile = s; break; }
             }
 
+            // Special handling for righe_opache: apply per-row Cmax from tipologia
+            if (k === 'righe_opache') {
+                const tipologieCmax = {
+                    'copertura_esterno': 300,
+                    'copertura_interno': 150,
+                    'copertura_ventilata': 350,
+                    'pavimento_esterno': 170,
+                    'pavimento_interno': 150,
+                    'parete_esterno': 200,
+                    'parete_interno': 100,
+                    'parete_ventilata': 250
+                };
+                let s = 0;
+                for (const r of arr) {
+                    const superficie = parseFloat(r?.superficie) || 0;
+                    const costo_totale = parseFloat(r?.costo_totale) || 0;
+                    if (superficie <= 0) continue;
+                    const costo_specifico = costo_totale / superficie;
+                    const cmax = tipologieCmax[r?.tipologia_struttura] || 0;
+                    const costoEff = cmax > 0 ? Math.min(costo_specifico, cmax) : costo_specifico;
+                    s += costoEff * superficie;
+                }
+                if (s > 0) { costoAmmissibile = s; break; }
+            }
+
             // default fallback: sum raw costo_totale if present
             const s = arr.reduce((sum, r) => sum + (parseFloat(r?.costo_totale) || 0), 0);
             if (s > 0) { costoAmmissibile = s; break; }
         }
     }
     if (!costoAmmissibile && params && params.superficie && params.costo_specifico) {
-        costoAmmissibile = Number(params.superficie) * Number(params.costo_specifico);
+        // When single-line inputs are used (superficie + costo_specifico) apply intervention-specific Cmax
+        const superficie = Number(params.superficie) || 0;
+        const costo_specifico = Number(params.costo_specifico) || 0;
+        // NZEB: Cmax depends on zona climatica
+        if (interventionId === 'nzeb') {
+            const cmax = (['A','B','C'].includes(params?.zona_climatica)) ? 1000 : 1300;
+            costoAmmissibile = superficie * Math.min(costo_specifico, cmax);
+        } else if (interventionId === 'sostituzione-infissi') {
+            const cmaxInfissi = (['D','E','F'].includes(params?.zona_climatica)) ? 800 : 700;
+            costoAmmissibile = superficie * Math.min(costo_specifico, cmaxInfissi);
+        } else {
+            costoAmmissibile = superficie * costo_specifico;
+        }
     }
 
     const pctMap = {
