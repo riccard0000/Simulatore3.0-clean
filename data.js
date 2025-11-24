@@ -1514,7 +1514,6 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         p_value: p,
                         UE: ueSelected,
                         Imas: imas,
-                        MassimaleSoggetto: MassimaleSoggetto,
                         MassimaleSoggetto_pct: (sog && typeof sog.finalPct === 'number') ? (calculatorData.formatNumber((sog.finalPct||0)*100,2) + ' %') : null,
                         MassimaleSoggetto_premialita: (sog.appliedPremiums || []).map(p=> `${p.name} (+${Math.round((p.addedPct||0)*100)} pp)`)
                     },
