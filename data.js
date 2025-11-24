@@ -1541,52 +1541,72 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 },
                 { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] }
             ],
-            calculate: (params, operatorType, contextData) => {
+            // computeItot: theoretical total incentive (without applying Imas or MassimaleSoggetto)
+            computeItot: (params, operatorType, contextData) => {
                 const { superficie, costo_specifico, zona_climatica } = params;
-                // Treat numeric zero as valid; only bail out when missing (undefined/null)
                 if (!superficie || costo_specifico === undefined || costo_specifico === null) return 0;
-                
-                // Cmax e Imas variano per zona climatica
-                let cmax, imax;
-                if (zona_climatica === 'A' || zona_climatica === 'B' || zona_climatica === 'C') {
-                    cmax = 1000; // €/m²
-                    imax = 2500000; // €
-                } else {
-                    cmax = 1300; // €/m²
-                    imax = 3000000; // €
-                }
-                
+                const cmax = (['A','B','C'].includes(zona_climatica)) ? 1000 : 1300;
                 const costoEffettivo = Math.min(costo_specifico, cmax);
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'nzeb');
                 const percentuale = det.p;
-
-                let incentivo = percentuale * costoEffettivo * superficie;
-
-                return Math.min(incentivo, imax);
+                return percentuale * costoEffettivo * superficie;
+            },
+            // getImas: subject to climatic zone
+            getImas: (params, operatorType, contextData) => {
+                const z = params?.zona_climatica;
+                return (['A','B','C'].includes(z)) ? 2500000 : 3000000;
+            },
+            // calculate: delegate to central helper to compute final = min(Itot, Imas, MassimaleSoggetto)
+            calculate: (params, operatorType, contextData) => {
+                const res = calculatorData.computeFinalForIntervention('nzeb', params, operatorType, contextData || {});
+                return res.finale;
             },
             explain: (params, operatorType, contextData) => {
-                const { superficie, costo_specifico, zona_climatica } = params;
-                let cmax, imax;
-                if (['A','B','C'].includes(zona_climatica)) { cmax=1000; imax=2500000; } else { cmax=1300; imax=3000000; }
+                const Itot = (calculatorData && calculatorData.interventions && typeof calculatorData.interventions['nzeb'].computeItot === 'function')
+                    ? calculatorData.interventions['nzeb'].computeItot(params, operatorType, contextData)
+                    : 0;
+                const imas = (calculatorData && calculatorData.interventions && typeof calculatorData.interventions['nzeb'].getImas === 'function')
+                    ? calculatorData.interventions['nzeb'].getImas(params, operatorType, contextData)
+                    : Number.POSITIVE_INFINITY;
+
+                const sog = (typeof calculatorData.getMassimaleSoggetto === 'function')
+                    ? calculatorData.getMassimaleSoggetto('nzeb', params, operatorType, contextData || {})
+                    : { massimale: Number.POSITIVE_INFINITY, finalPct: null, appliedPremiums: [] };
+                const MassimaleSoggetto = sog.massimale || Number.POSITIVE_INFINITY;
+
+                const finale = Math.min(Itot, imas, MassimaleSoggetto);
+
                 const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData, 'nzeb');
-                const percentuale = det.p;
                 const percentualeDesc = det.pDesc;
-                const Ceff = Math.min(costo_specifico||0, cmax);
-                const base = percentuale * Ceff * (superficie||0);
                 const ueSelected = !!(params?.premiums?.['prodotti-ue'] || (contextData?.selectedPremiums && contextData.selectedPremiums.includes && contextData.selectedPremiums.includes('prodotti-ue')));
-                const finale = Math.min(base, imax);
+
+                const steps = [];
+                steps.push(`Percentuale incentivazione: ${percentualeDesc}`);
+                steps.push(ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${calculatorData.formatNumber(det.p,2)})` : `  Premio Prodotti UE: non applicato`);
+                steps.push(`Totale teorico (Itot) = ${calculatorData.formatNumber(Itot,2)} €`);
+                steps.push(`Imas (massimale per intervento) = ${calculatorData.formatNumber(imas,0)} €`);
+                if (MassimaleSoggetto !== Number.POSITIVE_INFINITY) {
+                    steps.push(`Massimale soggetto = ${calculatorData.formatNumber(MassimaleSoggetto,2)} € (pct=${calculatorData.formatNumber((sog.finalPct||0)*100,2)}%)`);
+                    steps.push(`Finale = min(${calculatorData.formatNumber(Itot,2)}, ${calculatorData.formatNumber(imas,0)}, ${calculatorData.formatNumber(MassimaleSoggetto,2)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                } else {
+                    steps.push(`Finale = min(${calculatorData.formatNumber(Itot,2)}, ${calculatorData.formatNumber(imas,0)}) = ${calculatorData.formatNumber(finale,2)} €`);
+                }
+
                 return {
                     result: finale,
-                    formula: `Itot = p × min(C, ${cmax}) × Sed${ueSelected?' (premio UE incluso nella percentuale)':''}; Imas=${calculatorData.formatNumber(imax)}€`,
-                    // unify p and pDesc: present only `p` as descriptive string; keep numeric in `p_value` for programmatic use
-                    variables: { p: percentualeDesc, p_value: percentuale, C: (costo_specifico||0) ? (calculatorData.formatNumber(costo_specifico,2) + ' €/m²') : 0, Ceff: Ceff ? (calculatorData.formatNumber(Ceff,2) + ' €/m²') : 0, Sed: superficie||0, UE: ueSelected, Imas: calculatorData.formatCurrency(imax, 0) },
-                    steps: [
-                        `Percentuale incentivazione: ${percentualeDesc}`,
-                        ueSelected ? `  Premio Prodotti UE: incluso nella percentuale di incentivazione (p=${calculatorData.formatNumber(percentuale,2)})` : `  Premio Prodotti UE: non applicato`,
-                        `Ceff=min(${calculatorData.formatNumber(costo_specifico,2)}, ${cmax})=${calculatorData.formatNumber(Ceff,2)}`,
-                        `Base=${calculatorData.formatNumber(percentuale,4)}×${calculatorData.formatNumber(Ceff,2)}×${calculatorData.formatNumber(superficie,2)}=${calculatorData.formatNumber(base,2)}`,
-                        `Finale=min(${calculatorData.formatNumber(base,2)}, ${calculatorData.formatNumber(imax)})=${calculatorData.formatNumber(finale,2)}`
-                    ]
+                    formula: `Itot = p × min(C, Cmax) × Sed${ueSelected ? ' (premio UE incluso nella percentuale)' : ''}`,
+                    variables: {
+                        p: percentualeDesc,
+                        p_value: det.p,
+                        C: (params?.costo_specifico || 0),
+                        Ceff: Math.min(params?.costo_specifico || 0, (['A','B','C'].includes(params?.zona_climatica) ? 1000 : 1300)),
+                        Sed: params?.superficie || 0,
+                        UE: ueSelected,
+                        Imas: imas,
+                        MassimaleSoggetto_pct: (sog && typeof sog.finalPct === 'number') ? (calculatorData.formatNumber((sog.finalPct||0)*100,2) + ' %') : null,
+                        MassimaleSoggetto_premialita: (sog.appliedPremiums || []).map(p=> `${p.name} (+${Math.round((p.addedPct||0)*100)} pp)`)
+                    },
+                    steps
                 };
             }
         },
