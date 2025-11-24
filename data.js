@@ -1376,9 +1376,31 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 return incentivoTotale;
             },
 
-            // getImas: intervention-level cap (kept infinite unless specified)
+            // getImas: intervention-level cap computed from the table's last column (per-row imax)
+            // Sum the imax value for each supplied row so the intervention-level Imas
+            // reflects the total possible cap shown in the table.
             getImas: (params, operatorType, contextData) => {
-                return Number.POSITIVE_INFINITY;
+                const { righe_schermature } = params || {};
+                if (!righe_schermature || !Array.isArray(righe_schermature) || righe_schermature.length === 0) return Number.POSITIVE_INFINITY;
+
+                // Map of imax per tipologia (as in the options)
+                const imaxMap = {
+                    'Schermature/ombreggiamento': 90000,
+                    'Meccanismi automatici': 10000,
+                    'Filtrazione solare selettiva non riflettente': 30000,
+                    'Filtrazione solare selettiva riflettente': 30000
+                };
+
+                // Sum the imax for each row (if unknown tipology, treat as 0)
+                let totalImas = 0;
+                righe_schermature.forEach(riga => {
+                    const tip = riga && riga.tipologia_schermatura;
+                    if (!tip) return;
+                    const imax = imaxMap[tip] || 0;
+                    totalImas += imax;
+                });
+
+                return totalImas;
             },
 
             // calculate: delegate to central helper (final = min(Itot, Imas, MassimaleSoggetto))
@@ -1492,6 +1514,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         p_value: p,
                         UE: ueSelected,
                         Imas: imas,
+                        MassimaleSoggetto: MassimaleSoggetto,
                         MassimaleSoggetto_pct: (sog && typeof sog.finalPct === 'number') ? (calculatorData.formatNumber((sog.finalPct||0)*100,2) + ' %') : null,
                         MassimaleSoggetto_premialita: (sog.appliedPremiums || []).map(p=> `${p.name} (+${Math.round((p.addedPct||0)*100)} pp)`)
                     },
@@ -3378,6 +3401,30 @@ calculatorData.getMassimaleSoggetto = function(interventionId, params, opType, c
         const rowArrays = Object.keys(params).filter(k => Array.isArray(params[k]));
         for (const k of rowArrays) {
             const arr = params[k];
+            // Special handling for known table-like inputs to compute the "costo ammissibile"
+            // as the sum of per-row min(C_specifico, Cmax) * superficie when available
+            if (k === 'righe_schermature') {
+                // cmax map for schermature-solari
+                const cmaxMap = {
+                    'Schermature/ombreggiamento': 250,
+                    'Meccanismi automatici': 50,
+                    'Filtrazione solare selettiva non riflettente': 130,
+                    'Filtrazione solare selettiva riflettente': 80
+                };
+                let s = 0;
+                for (const r of arr) {
+                    const superficie = parseFloat(r?.superficie) || 0;
+                    const costo_totale = parseFloat(r?.costo_totale) || 0;
+                    if (superficie <= 0) continue;
+                    const costo_specifico = costo_totale / superficie;
+                    const cmax = cmaxMap[r?.tipologia_schermatura] || 0;
+                    const costoEff = cmax > 0 ? Math.min(costo_specifico, cmax) : costo_specifico;
+                    s += costoEff * superficie;
+                }
+                if (s > 0) { costoAmmissibile = s; break; }
+            }
+
+            // default fallback: sum raw costo_totale if present
             const s = arr.reduce((sum, r) => sum + (parseFloat(r?.costo_totale) || 0), 0);
             if (s > 0) { costoAmmissibile = s; break; }
         }
