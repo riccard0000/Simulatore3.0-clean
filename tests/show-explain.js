@@ -11,7 +11,7 @@ if (!calculatorData) { console.error('calculatorData not found in data.js'); pro
 const intId = 'isolamento-opache';
 const intervention = calculatorData.interventions[intId];
 const params = { zona_climatica: 'A', righe_opache: [ { tipologia_struttura: 'copertura_esterno', superficie: 100, costo_totale: 30000 } ] };
-const contextData = { selectedInterventions: ['isolamento-opache','pompa-calore'], selectedPremiums: [], buildingSubcategory: '', subjectType: 'person' };
+const contextData = { selectedInterventions: ['isolamento-opache','pompa-calore-elettrica'], selectedPremiums: [], buildingSubcategory: '', subjectType: 'person' };
 
 const exp = intervention.explain(params, 'private_tertiary_person', contextData);
 console.log('explain.variables.p =', exp.variables.p, 'p_value=', exp.variables.p_value || exp.variables.pNumeric || exp.variables.p_num || null);

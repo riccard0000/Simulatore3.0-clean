@@ -8,10 +8,10 @@ vm.runInContext(code + '\nresult = typeof calculatorData !== "undefined" ? calcu
 const calculatorData = sandbox.result;
 if (!calculatorData) { console.error('calculatorData not found in data.js'); process.exit(2); }
 
-const selectedInterventions = ['isolamento-opache','pompa-calore'];
+const selectedInterventions = ['isolamento-opache','pompa-calore-elettrica'];
 const inputsByIntervention = {
   'isolamento-opache': {},
-  'pompa-calore': {}
+  'pompa-calore-elettrica': {}
 };
 const operatorType = 'private_tertiary_person';
 const globalPremiums = [];

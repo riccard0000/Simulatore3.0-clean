@@ -10,11 +10,11 @@ vm.runInContext(code + '\nresult = typeof calculatorData !== "undefined" ? calcu
 const calculatorData = sandbox.result;
 if (!calculatorData) { console.error('calculatorData not found'); process.exit(2); }
 
-console.log('Running pompa-calore tests...');
+console.log('Running pompa-calore-elettrica tests...');
 
-// Helper to call calculate/explain for pompa-calore
+// Helper to call calculate/explain for pompa-calore-elettrica
 function callDeterminePercent(selectedInterventions, params, operatorType, contextData) {
-    return calculatorData.determinePercentuale(selectedInterventions || [], params || {}, operatorType || '', contextData || {}, 'pompa-calore');
+    return calculatorData.determinePercentuale(selectedInterventions || [], params || {}, operatorType || '', contextData || {}, 'pompa-calore-elettrica');
 }
 
 // Test 1: Large enterprise (private_tertiary_large) -> p = 0.45
@@ -39,4 +39,4 @@ assert.strictEqual(det4.p, 0.65, 'PA should have p = 0.65 for Category 2');
 let det5 = callDeterminePercent([], {}, 'pa', { selectedInterventions: [], buildingSubcategory: 'tertiary_school', is_comune: true, is_edificio_comunale: true, is_piccolo_comune: true, subjectType: 'pa' });
 assert.strictEqual(det5.p, 1.0, 'Piccolo comune / Art.48-ter should override to 100%');
 
-console.log('All pompa-calore tests passed.');
+console.log('All pompa-calore-elettrica tests passed.');

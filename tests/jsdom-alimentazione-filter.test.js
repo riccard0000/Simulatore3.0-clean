@@ -29,8 +29,8 @@ if (!calculatorData) {
 console.log('Running jsdom alimentazione -> tipo_pompa filter test...');
 
 // Locate the tipo_pompa options from the intervention definition in calculatorData
-const pompa = calculatorData.interventions && calculatorData.interventions['pompa-calore'];
-if (!pompa) { console.error('pompa-calore not found in calculatorData'); process.exit(2); }
+const pompa = calculatorData.interventions && calculatorData.interventions['pompa-calore-elettrica'];
+if (!pompa) { console.error('pompa-calore-elettrica not found in calculatorData'); process.exit(2); }
 
 const tableInput = pompa.inputs.find(i => i.id === 'righe_pompe');
 if (!tableInput) { console.error('righe_pompe input descriptor not found'); process.exit(2); }

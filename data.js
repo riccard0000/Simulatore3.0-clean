@@ -2206,8 +2206,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         },
 
         // --- INTERVENTI DI PRODUZIONE DI ENERGIA TERMICA DA FONTI RINNOVABILI (Art. 8) ---
-        'pompa-calore': {
-            name: '2.A - Sostituzione con pompe di calore',
+        'pompa-calore-elettrica': {
+            name: '2.A - Sostituzione con pompe di calore elettriche',
             description: 'Art. 8, comma 1, lett. a) - Sostituzione di impianti di climatizzazione invernale esistenti con pompe di calore elettriche ad alta efficienza per la produzione di energia termica da fonti rinnovabili.',
             category: 'Fonti Rinnovabili',
             allowedOperators: ['pa', 'private_tertiary_person', 'private_tertiary_small', 'private_tertiary_medium', 'private_tertiary_large', 'private_residential'],
@@ -2337,7 +2337,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 let detP = 0;
                 try {
                     const sel = Array.isArray(contextData?.selectedInterventions) ? contextData.selectedInterventions : [];
-                    const det = calculatorData.determinePercentuale(sel, params || {}, operatorType || '', contextData || {}, 'pompa-calore');
+                    const det = calculatorData.determinePercentuale(sel, params || {}, operatorType || '', contextData || {}, 'pompa-calore-elettrica');
                     detP = (det && typeof det.p === 'number') ? det.p : 0;
                 } catch (e) {
                     detP = 0;
@@ -2451,7 +2451,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 let detP = 0;
                 try {
                     const sel = Array.isArray(contextData?.selectedInterventions) ? contextData.selectedInterventions : [];
-                    const det = calculatorData.determinePercentuale(sel, params || {}, operatorType || '', contextData || {}, 'pompa-calore');
+                    const det = calculatorData.determinePercentuale(sel, params || {}, operatorType || '', contextData || {}, 'pompa-calore-elettrica');
                     detP = (det && typeof det.p === 'number') ? det.p : 0;
                 } catch (e) {
                     detP = 0;
@@ -2479,6 +2479,257 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     variables: { 
                         rowsCount: rows.length, 
                         // Formattati come valuta per chiarezza nella tabella di dettaglio
+                        totale_calcolato: calculatorData.formatCurrency(total, 2), 
+                        costo_totale_input: calculatorData.formatCurrency(costInput, 2), 
+                        percentuale_p: detP, 
+                        tetto: calculatorData.formatCurrency(cap, 2) 
+                    } 
+                };
+            }
+        },
+        'pompa-calore-gas': {
+            name: '2.A - Sostituzione con pompe di calore a gas',
+            description: 'Art. 8, comma 1, lett. a) - Sostituzione di impianti di climatizzazione invernale esistenti con pompe di calore a gas per la produzione di energia termica da fonti rinnovabili/combustibili a gas.',
+            category: 'Fonti Rinnovabili',
+            allowedOperators: ['pa', 'private_tertiary_person', 'private_tertiary_small', 'private_tertiary_medium', 'private_tertiary_large', 'private_residential'],
+            restrictionNote: 'Intervento riservato a pompe di calore alimentate a GAS; verificare specifici requisiti normativi locali.',
+            inputs: [
+                { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0, help: 'Opzionale: se fornisci i costi per singola pompa, questo campo può restare vuoto.' },
+                { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'], help: 'Seleziona la zona climatica dell\'edificio (valore unico per tutte le pompe inserite)' },
+                {
+                    id: 'righe_pompe',
+                    name: 'Tabella pompe di calore',
+                    type: 'table',
+                    columns: [
+                        { id: 'alimentazione', name: 'Alimentazione', type: 'select', options: ['Elettrica','GAS'], optional: false, help: 'Seleziona il tipo di alimentazione: Elettrica o GAS (default: GAS)' },
+                        { id: 'tipo_pompa', name: 'Tipo di pompa di calore', type: 'select', options: getPumpTypeOptions() },
+                        { id: 'potenza_nominale', name: 'Potenza termica nominale Prated (kW)', type: 'number', min: 0, step: 0.1 },
+                        { id: 'scop', name: 'SCOP/SPER stagionale', type: 'number', step: 0.01, optional: true },
+                        { id: 'cop', name: 'COP (solo per fixed double duct)', type: 'number', min: 0, step: 0.01, optional: true },
+                        { id: 'eff_stagionale', name: 'Efficienza stagionale (ηs) - valore assoluto', type: 'number', min: 110, step: 1, help: 'Valore assoluto (es. 137). Sempre visibile; non editabile per fixed double duct.' },
+                        { id: 'gwp', name: 'Fascia GWP refrigerante', type: 'select', options: ['>150', '<=150'], optional: true, help: 'Seleziona la fascia GWP del refrigerante per le tipologie che la richiedono' }
+                    ],
+                    help: 'Aggiungi una riga per ogni pompa presente nell\'impianto. I parametri di ciascuna riga verranno valutati separatamente e sommati. La zona climatica è specificata una sola volta per l\'intervento.'
+                }
+            ],
+            calculate: (params, operatorType, contextData) => {
+                const rows = Array.isArray(params?.righe_pompe) ? params.righe_pompe : [];
+                if (rows.length === 0) return 0;
+
+                const qufTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
+
+                let totalIncentive = 0;
+                const topZona = params?.zona_climatica || null;
+                rows.forEach(row => {
+                    const tipo_pompa = row?.tipo_pompa || '';
+                    const potenza_nominale = Number(row?.potenza_nominale) || 0;
+                    const scop = row?.scop !== undefined && row?.scop !== null ? Number(row.scop) : null;
+                    const cop = row?.cop !== undefined && row?.cop !== null ? Number(row.cop) : null;
+                    const alimentazione = (row?.alimentazione || 'GAS');
+                    const eff_stagionale = row?.eff_stagionale !== undefined && row?.eff_stagionale !== null ? Number(row.eff_stagionale) : null;
+                    const gwp = row?.gwp || null;
+                    const zona_climatica = topZona || row?.zona_climatica;
+                    if (!potenza_nominale || (!scop && !cop) || !zona_climatica) return;
+
+                    const spec = getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {};
+                    const effSpec = getPumpEfficiencyMin(tipo_pompa, gwp, alimentazione, (typeof potenza_nominale === 'number') ? potenza_nominale : (Number(potenza_nominale) || undefined)) || {};
+                    let userValue = null;
+                    let minValue = null;
+                    let metric = null;
+                    if (spec.cop) {
+                        metric = 'cop';
+                        userValue = cop;
+                        minValue = spec.cop;
+                    } else if (spec.scop) {
+                        metric = 'scop';
+                        userValue = scop;
+                        minValue = spec.scop;
+                    } else {
+                        metric = 'scop';
+                        userValue = scop;
+                        minValue = spec.scop || 1;
+                    }
+
+                    if (userValue === null || userValue === undefined) return;
+
+                    let notCompliant = false;
+                    if (minValue !== undefined && minValue !== null) {
+                        if (userValue < minValue) notCompliant = true;
+                    }
+
+                    let seasonalMin = null;
+                    if (effSpec && typeof effSpec.eta_s_min !== 'undefined') seasonalMin = Number(effSpec.eta_s_min);
+                    if (seasonalMin !== null && eff_stagionale !== null) {
+                        if (eff_stagionale < seasonalMin) notCompliant = true;
+                    }
+
+                    const quf = qufTable[zona_climatica] || 0;
+                    const qu = potenza_nominale * quf;
+                    let kp = 1;
+                    try {
+                        const tipoLower = String(tipo_pompa || '').toLowerCase();
+                        const isFixedDouble = tipoLower.includes('fixed') && tipoLower.includes('double');
+                        if (isFixedDouble) {
+                            const copMinSpec = (typeof getPumpEcodesignSpec === 'function') ? (getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {}).cop : (spec.cop || minValue);
+                            const copMin = (copMinSpec === undefined || copMinSpec === null) ? minValue : Number(copMinSpec);
+                            kp = (copMin > 0) ? (Number(cop) / copMin) : 1;
+                        } else if (seasonalMin !== null && eff_stagionale !== null && seasonalMin > 0) {
+                            kp = Number(eff_stagionale) / Number(seasonalMin);
+                        } else {
+                            kp = (minValue && minValue > 0) ? (Number(userValue) / Number(minValue)) : 1;
+                        }
+                    } catch (e) {
+                        kp = (minValue && minValue > 0 && userValue) ? (Number(userValue) / Number(minValue)) : 1;
+                    }
+                    const ei = qu * (1 - 1/(scop||userValue)) * kp;
+                    const ci = getCanonicalPumpCi(tipo_pompa, gwp, alimentazione, potenza_nominale);
+                    const incentivo_annuo = ci !== null ? ci * ei : 0;
+                    const durata = (potenza_nominale > 35) ? 5 : 2;
+                    totalIncentive += incentivo_annuo * durata;
+                });
+
+                contextData = contextData || {};
+                const costInput = Number(params?.costo_totale) || 0;
+                let detP = 0;
+                try {
+                    const sel = Array.isArray(contextData?.selectedInterventions) ? contextData.selectedInterventions : [];
+                    const det = calculatorData.determinePercentuale(sel, params || {}, operatorType || '', contextData || {}, 'pompa-calore-gas');
+                    detP = (det && typeof det.p === 'number') ? det.p : 0;
+                } catch (e) {
+                    detP = 0;
+                }
+
+                const cap = detP * costInput;
+                const cappedTotal = (cap > 0) ? Math.min(totalIncentive, cap) : totalIncentive;
+
+                return cappedTotal;
+            },
+            explain: (params, operatorType, contextData) => {
+                const rows = Array.isArray(params?.righe_pompe) ? params.righe_pompe : [];
+                const qufTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
+                const steps = [];
+                let total = 0;
+
+                rows.forEach((row, idx) => {
+                    const tipo_pompa = row?.tipo_pompa || '';
+                    const Pr = Number(row?.potenza_nominale) || 0;
+                    const scop = row?.scop !== undefined && row?.scop !== null ? Number(row.scop) : null;
+                    const cop = row?.cop !== undefined && row?.cop !== null ? Number(row.cop) : null;
+                    const zona = params?.zona_climatica || row?.zona_climatica;
+                    const gwp = row?.gwp || null;
+                    if (!Pr || (!scop && !cop) || !zona) {
+                        steps.push(`Riga ${idx+1}: parametri incompleti, ignorata.`);
+                        return;
+                    }
+
+                    const alimentazione = (row?.alimentazione || 'GAS');
+                    const spec = getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {};
+                    const effSpec = getPumpEfficiencyMin(tipo_pompa, gwp, alimentazione, (typeof Pr === 'number') ? Pr : (Number(Pr) || undefined)) || {};
+                    let metric = spec.cop ? 'COP' : 'SCOP/SPER';
+                    let userValue = metric === 'COP' ? cop : scop;
+                    let minValue = metric === 'COP' ? spec.cop : spec.scop;
+                    const metricLabel = (metric === 'COP') ? 'COP' : ((String(alimentazione || '').toLowerCase() === 'gas') ? 'SPER' : 'SCOP');
+                    if (minValue === undefined || minValue === null) minValue = 1;
+
+                    const Quf = qufTable[zona] || 0; const Qu = Pr * Quf;
+
+                    const eff_stagionale = row?.eff_stagionale !== undefined && row?.eff_stagionale !== null ? Number(row.eff_stagionale) : null;
+                    let seasonalMin = null;
+                    if (effSpec && typeof effSpec.eta_s_min !== 'undefined') seasonalMin = Number(effSpec.eta_s_min);
+
+                    let kp = 1;
+                    try {
+                        const tipoLower = String(tipo_pompa || '').toLowerCase();
+                        const isFixedDouble = tipoLower.includes('fixed') && tipoLower.includes('double');
+                        if (isFixedDouble) {
+                            const copMinSpec = (typeof getPumpEcodesignSpec === 'function') ? (getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {}).cop : (spec.cop || minValue);
+                            const copMin = (copMinSpec === undefined || copMinSpec === null) ? minValue : Number(copMinSpec);
+                            kp = (copMin > 0) ? (Number(userValue) / copMin) : 1;
+                        } else if (seasonalMin !== null && eff_stagionale !== null) {
+                            kp = eff_stagionale / seasonalMin;
+                        } else {
+                            kp = (userValue && minValue && minValue > 0) ? (Number(userValue) / Number(minValue)) : 1;
+                        }
+                    } catch (e) {
+                        kp = (userValue && minValue && minValue > 0) ? (Number(userValue) / Number(minValue)) : 1;
+                    }
+                    const oneMinusInvScop = 1 - 1/(scop||userValue);
+                    const EI = Qu * oneMinusInvScop * kp;
+                    let Ci = null;
+                    try { Ci = getCanonicalPumpCi(tipo_pompa, gwp, alimentazione, Pr); } catch(e) { Ci = null; }
+                    const Ia_annuo = Ci===null?0:(Ci * EI);
+                    const durata = (Pr > 35) ? 5 : 2;
+                    const totale = Ia_annuo * durata;
+                    total += totale;
+
+                    const notCompliantMetric = userValue < minValue;
+                    const notCompliantSeasonal = (seasonalMin !== null && eff_stagionale !== null && eff_stagionale < seasonalMin);
+                    const notCompliant = notCompliantMetric || notCompliantSeasonal;
+
+                    steps.push(`Riga ${idx+1} (${tipo_pompa} - Pr=${Pr} kW, zona ${zona}):`);
+                    steps.push(`• ${metricLabel} inserito = ${userValue}; minimo Ecodesign (${metricLabel}) = ${minValue}` + (notCompliantMetric ? ' → ATTENZIONE: NON conforme al requisito Ecodesign' : ''));
+                    if (seasonalMin !== null) {
+                        steps.push(`• Efficienza stagionale inserita = ${eff_stagionale === null ? 'N/D' : calculatorData.formatNumber(eff_stagionale,0)}; minimo Ecodesign (ηs_min) = ${calculatorData.formatNumber(seasonalMin,0)}` + (notCompliantSeasonal ? ' → ATTENZIONE: valore inferiore al minimo richiesto' : ''));
+                    }
+                    try {
+                        const tipoLower = String(tipo_pompa || '').toLowerCase();
+                        const isFixedDouble = tipoLower.includes('fixed') && tipoLower.includes('double');
+                        if (isFixedDouble) {
+                            const copMinSpec = (typeof getPumpEcodesignSpec === 'function') ? (getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {}).cop : (spec.cop || minValue);
+                            const copMin = (copMinSpec === undefined || copMinSpec === null) ? minValue : Number(copMinSpec);
+                            steps.push(`• kp = COP / COP_min = ${calculatorData.formatNumber(userValue,3)} / ${calculatorData.formatNumber(copMin,3)} = ${calculatorData.formatNumber(kp,3)}`);
+                        } else if (seasonalMin !== null && eff_stagionale !== null) {
+                            steps.push(`• kp = ηs / ηs_min = ${calculatorData.formatNumber(eff_stagionale,0)} / ${calculatorData.formatNumber(seasonalMin,0)} = ${calculatorData.formatNumber(kp,3)}`);
+                        } else {
+                            steps.push(`• kp (fallback) = ${metricLabel} / ${metricLabel}_min = ${calculatorData.formatNumber(userValue,3)} / ${calculatorData.formatNumber(minValue,3)} = ${calculatorData.formatNumber(kp,3)}`);
+                        }
+                    } catch (e) {
+                        steps.push(`• kp (calc) = ${calculatorData.formatNumber(kp,3)}`);
+                    }
+                    steps.push(`• Quf (ore/anno per zona ${zona}) = ${calculatorData.formatNumber(Quf,0)}`);
+                    steps.push(`• Qu = Pr × Quf = ${calculatorData.formatNumber(Pr,2)} kW × ${calculatorData.formatNumber(Quf,0)} h = ${calculatorData.formatNumber(Qu,2)} kWh/anno`);
+                    steps.push(`• Fattore = (1 - 1/${metricLabel}) = 1 - 1/${calculatorData.formatNumber((scop||userValue),3)} = ${calculatorData.formatNumber(oneMinusInvScop,6)}`);
+                    steps.push(`• EI = Qu × Fattore × kp = ${calculatorData.formatNumber(Qu,2)} × ${calculatorData.formatNumber(oneMinusInvScop,6)} × ${calculatorData.formatNumber(kp,3)} = ${calculatorData.formatNumber(EI,2)}`);
+                    steps.push(`• Ci = ${Ci===null? 'N/D' : calculatorData.formatNumber(Ci,3)} → Ia_annuo = Ci × EI = ${calculatorData.formatNumber(Ia_annuo,2)}; durata = ${durata} anni → incentivo € ${calculatorData.formatNumber(totale,2)}`);
+                    steps.push('----------------------------------------');
+                });
+
+                steps.push('');
+                steps.push('Riepilogo totale:');
+                steps.push(`Totale incentivo calcolato per tutte le pompe: € ${calculatorData.formatNumber(total,2)}`);
+
+                contextData = contextData || {};
+                const costInput = Number(params?.costo_totale) || 0;
+                let detP = 0;
+                try {
+                    const sel = Array.isArray(contextData?.selectedInterventions) ? contextData.selectedInterventions : [];
+                    const det = calculatorData.determinePercentuale(sel, params || {}, operatorType || '', contextData || {}, 'pompa-calore-gas');
+                    detP = (det && typeof det.p === 'number') ? det.p : 0;
+                } catch (e) {
+                    detP = 0;
+                }
+                const cap = detP * costInput;
+                let finalResult = total;
+                if (cap > 0) {
+                    const capped = Math.min(total, cap);
+                    if (capped !== total) {
+                        steps.push(`Applicato tetto: min(incentivo_calcolato, p × costo_totale) = min(€${calculatorData.formatNumber(total,2)}, ${ calculatorData.formatNumber(detP*100,2) }% × €${calculatorData.formatNumber(costInput,2)} ) = €${calculatorData.formatNumber(capped,2)}`);
+                    } else {
+                        steps.push(`Nessun tetto applicato: tetto p×costo = €${calculatorData.formatNumber(cap,2)} >= incentivo calcolato`);
+                    }
+                    finalResult = Math.min(total, cap);
+                } else {
+                    steps.push('Nessun costo totale fornito o percentuale incentivabile assente: nessun tetto applicato.');
+                }
+
+                steps.push(`Totale incentivo erogabile finale: € ${calculatorData.formatNumber(finalResult,2)}`);
+
+                return { 
+                    result: finalResult, 
+                    steps, 
+                    formula: 'min(Imas_calcolato, p × costo_totale)', 
+                    variables: { 
+                        rowsCount: rows.length, 
                         totale_calcolato: calculatorData.formatCurrency(total, 2), 
                         costo_totale_input: calculatorData.formatCurrency(costInput, 2), 
                         percentuale_p: detP, 
@@ -3049,7 +3300,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             isApplicable: (selectedInterventions) => {
                 const hasTitoloII = selectedInterventions.some(id => id === 'isolamento-opache' || id === 'sostituzione-infissi');
                 const hasTitoloIII = selectedInterventions.some(id => {
-                    return ['pompa-calore', 'sistemi-ibridi', 'biomassa', 'scaldacqua-pdc'].includes(id);
+                    return ['pompa-calore-elettrica', 'pompa-calore-gas', 'sistemi-ibridi', 'biomassa', 'scaldacqua-pdc'].includes(id);
                 });
                 return hasTitoloII && hasTitoloIII;
             }
@@ -3289,10 +3540,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 // vengono realizzati più interventi di Categoria 1 oppure quando è selezionato NZEB da solo.
 
                 let addPct = 0;
+                const appliedPremiums = [];
                 const selectedPremiums = (ctx && Array.isArray(ctx.selectedPremiums)) ? ctx.selectedPremiums : (ctx && ctx.selectedPremiums ? ctx.selectedPremiums : []);
-                if (selectedPremiums.includes('a107_3_a')) addPct += 0.15;
-                if (selectedPremiums.includes('a107_3_c')) addPct += 0.05;
-                if (selectedPremiums.includes('miglioramento_40')) addPct += 0.15;
+                if (selectedPremiums.includes('a107_3_a')) { addPct += 0.15; appliedPremiums.push({ id: 'a107_3_a', name: 'Premio A107.3.a', addedPct: 0.15 }); }
+                if (selectedPremiums.includes('a107_3_c')) { addPct += 0.05; appliedPremiums.push({ id: 'a107_3_c', name: 'Premio A107.3.c', addedPct: 0.05 }); }
+                if (selectedPremiums.includes('miglioramento_40')) { addPct += 0.15; appliedPremiums.push({ id: 'miglioramento_40', name: 'Miglioramento 40%', addedPct: 0.15 }); }
 
                 // Determine selected interventions and count how many are Category 1
                 const selInts = (ctx && Array.isArray(ctx.selectedInterventions)) ? ctx.selectedInterventions.slice() : [];
@@ -3305,18 +3557,39 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     // treat 'nzeb' as special: if present, we will apply tipo B bonus regardless of other counts
                 }
 
+                let multiInterventoApplied = false;
                 if (selInts.includes('nzeb')) {
                     // NZEB selected: exclusive and treated as tipo B multi-intervento -> +5pp
                     addPct += 0.05;
+                    appliedPremiums.push({ id: 'multi_nzeb', name: 'Premio multi-intervento (NZEB)', addedPct: 0.05 });
+                    multiInterventoApplied = true;
                 } else if (category1Count > 1) {
                     // Multiple Category 1 interventions => tipo B multi-intervento applies
                     addPct += 0.05;
+                    appliedPremiums.push({ id: 'multi_cat1', name: 'Premio multi-intervento (Categoria 1 multipla)', addedPct: 0.05 });
+                    multiInterventoApplied = true;
+                }
+
+                // New rule: if interventions 1.G or 1.H are present, always apply the
+                // multi-intervento premium (+5pp) to the subject percentage (once).
+                // Do not double-apply if already applied above.
+                const triggers = ['infrastrutture-ricarica', 'fotovoltaico-accumulo'];
+                // Apply the 1.G/1.H multi-intervento premiality also when the
+                // current call is computing the massimale for one of those
+                // interventions even if `ctx.selectedInterventions` is empty.
+                // This mirrors NZEB behavior where NZEB implies the premiality
+                // regardless of other selections.
+                const has1G1H = selInts.some(id => triggers.includes(id)) || triggers.includes(interventionId);
+                if (has1G1H && !multiInterventoApplied) {
+                    addPct += 0.05;
+                    appliedPremiums.push({ id: 'multi_1G_1H', name: 'Premio multi-intervento (1.G/1.H)', addedPct: 0.05 });
+                    multiInterventoApplied = true;
                 }
 
                 const finalPct = Math.min(1.0, +(basePct + addPct).toFixed(4));
 
                 const massimale = costoAmmissibile > 0 ? Math.round(finalPct * costoAmmissibile) : 0;
-                return { massimale, finalPct, costoAmmissibile, basePct, addPct };
+                return { massimale, finalPct, costoAmmissibile, basePct, addPct, appliedPremiums };
             };
 
             // Helper: calcola il risultato dettagliato per un singolo intervento
@@ -3656,8 +3929,24 @@ calculatorData.getMassimaleSoggetto = function(interventionId, params, opType, c
         const name = (it.name || '').toString().trim();
         if (name.startsWith('1.')) category1Count += 1;
     }
-    if (selInts.includes('nzeb')) addPct += 0.05;
-    else if (category1Count > 1) addPct += 0.05;
+    // Multi-intervento type B: NZEB or multiple Category 1 interventions -> +5pp
+    // Also apply when the current intervention is 1.G or 1.H (or they are selected),
+    // to mirror NZEB behavior and ensure these triggers always get the +5pp bonus.
+    let multiInterventoApplied = false;
+    if (selInts.includes('nzeb')) {
+        addPct += 0.05;
+        multiInterventoApplied = true;
+    } else if (category1Count > 1) {
+        addPct += 0.05;
+        multiInterventoApplied = true;
+    } else {
+        const triggers = ['infrastrutture-ricarica', 'fotovoltaico-accumulo'];
+        const has1G1H = selInts.some(id => triggers.includes(id)) || triggers.includes(interventionId);
+        if (has1G1H) {
+            addPct += 0.05;
+            multiInterventoApplied = true;
+        }
+    }
 
     const finalPct = Math.min(1.0, +(basePct + addPct).toFixed(4));
     const massimale = costoAmmissibile > 0 ? Math.round(finalPct * costoAmmissibile) : 0;
@@ -3674,8 +3963,8 @@ calculatorData.getMassimaleSoggetto = function(interventionId, params, opType, c
     if (hasPremium('a107_3_a')) appliedPremiums.push({ id: 'a107_3_a', name: premiumLabels['a107_3_a'], addedPct: 0.15 });
     if (hasPremium('a107_3_c')) appliedPremiums.push({ id: 'a107_3_c', name: premiumLabels['a107_3_c'], addedPct: 0.05 });
     if (hasPremium('miglioramento_40')) appliedPremiums.push({ id: 'miglioramento_40', name: premiumLabels['miglioramento_40'], addedPct: 0.15 });
-    // multi-intervento type B: recorded if we added addPct due to nzeb or multiple category1
-    if ((ctx && Array.isArray(ctx.selectedInterventions) && ctx.selectedInterventions.includes('nzeb')) || (typeof category1Count !== 'undefined' && category1Count > 1)) {
+    // multi-intervento type B: record if we applied the +5pp above (NZEB, multiple Cat1, or 1.G/1.H triggers)
+    if (multiInterventoApplied) {
         appliedPremiums.push({ id: 'multi-intervento-b', name: premiumLabels['multi-intervento-b'], addedPct: 0.05 });
     }
 

@@ -26,8 +26,8 @@ function getKpFromExplain(explainObj) {
 
 console.log('Running KP fixed-double-duct tests...');
 
-const pompa = calculatorData.interventions && calculatorData.interventions['pompa-calore'];
-if (!pompa) { console.error('pompa-calore intervention not found'); process.exit(2); }
+const pompa = calculatorData.interventions && calculatorData.interventions['pompa-calore-elettrica'];
+if (!pompa) { console.error('pompa-calore-elettrica intervention not found'); process.exit(2); }
 
 // Case 1: GWP >150 -> COP_min expected 2.60
 const params1 = {
@@ -36,7 +36,7 @@ const params1 = {
         { tipo_pompa: 'aria/aria fixed double duct', potenza_nominale: 10, cop: 2.8, scop: null, eff_stagionale: null, gwp: '>150' }
     ]
 };
-const expl1 = pompa.explain(params1, 'private_tertiary_small', { selectedInterventions: ['pompa-calore'] });
+const expl1 = pompa.explain(params1, 'private_tertiary_small', { selectedInterventions: ['pompa-calore-elettrica'] });
 console.log('Explain steps (case1):');
 console.log(expl1.steps.join('\n'));
 const kp1 = getKpFromExplain(expl1);
@@ -52,7 +52,7 @@ const params2 = {
         { tipo_pompa: 'aria/aria fixed double duct', potenza_nominale: 10, cop: 2.8, scop: null, eff_stagionale: null, gwp: '<=150' }
     ]
 };
-const expl2 = pompa.explain(params2, 'private_tertiary_small', { selectedInterventions: ['pompa-calore'] });
+const expl2 = pompa.explain(params2, 'private_tertiary_small', { selectedInterventions: ['pompa-calore-elettrica'] });
 console.log('Explain steps (case2):');
 console.log(expl2.steps.join('\n'));
 const kp2 = getKpFromExplain(expl2);

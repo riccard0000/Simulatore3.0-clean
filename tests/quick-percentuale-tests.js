@@ -37,15 +37,15 @@ tests.push({
 
 // 3. Multi-intervento 1.A + 2.A -> isolamento-opache p=55%
 tests.push({
-  desc: "Multi intervento: isolamento-opache with pompa-calore -> 55%",
-  args: { selectedInterventions: ['isolamento-opache','pompa-calore'], params: {}, operatorType: 'private_tertiary_person', contextData: { selectedInterventions: ['isolamento-opache','pompa-calore'] }, interventionId: 'isolamento-opache'},
+  desc: "Multi intervento: isolamento-opache with pompa-calore-elettrica -> 55%",
+  args: { selectedInterventions: ['isolamento-opache','pompa-calore-elettrica'], params: {}, operatorType: 'private_tertiary_person', contextData: { selectedInterventions: ['isolamento-opache','pompa-calore-elettrica'] }, interventionId: 'isolamento-opache'},
   expected: { p: 0.55 }
 });
 
 // 4. Multi-intervento 1.B when 1.A + Titolo III present -> 55%
 tests.push({
   desc: "Multi intervento: sostituzione-infissi when 1A+TitoloIII present -> 55%",
-  args: { selectedInterventions: ['isolamento-opache','sostituzione-infissi','pompa-calore'], params: {}, operatorType: 'private_tertiary_person', contextData: { selectedInterventions: ['isolamento-opache','sostituzione-infissi','pompa-calore'] }, interventionId: 'sostituzione-infissi'},
+  args: { selectedInterventions: ['isolamento-opache','sostituzione-infissi','pompa-calore-elettrica'], params: {}, operatorType: 'private_tertiary_person', contextData: { selectedInterventions: ['isolamento-opache','sostituzione-infissi','pompa-calore-elettrica'] }, interventionId: 'sostituzione-infissi'},
   expected: { p: 0.55 }
 });
 

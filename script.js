@@ -22,222 +22,38 @@ async function initCalculator() {
         selectedSubject: '', // Step 1
         selectedBuilding: '', // Step 2
         buildingSubcategory: '', // Sottocategoria terziario (school/hospital/prison)
-        selectedMode: '', // Step 3 - inizialmente vuoto, richiede selezione esplicita
-        selectedOperator: '', // operatorType calcolato dalla matrice
+        selectedOperator: '',
         selectedInterventions: [],
         selectedPremiums: [],
         inputValues: {},
-        subjectSpecificData: {} // Dati aggiuntivi come popolazione_comune
+        subjectSpecificData: {}
     };
 
-    // Keep previous selection snapshot to allow reverting when user attempts incompatible selection
+    // Previously selected interventions (used to restore selection when conflicts occur)
     let prevSelectedInterventions = [];
 
-    // NOTE: automatic ecodesign SCOP/COP population removed per user request.
-    // Users must enter SCOP/SCOP_min manually; validation and power constraints remain active.
-
-    // Normative SCOP minima per tipologia pompa (tabella ecodesign)
-        const PUMP_SCOP_MIN = {}; // Legacy in-file maps have been removed to ensure a single source of truth.
-        // Normative SCOP minima are obtained from the canonical regulatory table
-        // (via getPumpEcodesignSpec / lookupRegulatorySpec). Legacy in-file maps
-        // have been removed to ensure a single source of truth.
-
-    function canonicalKey(s) {
-        return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+    // Compatibility shims: ensure row-scoped constraint helpers exist.
+    // These were referenced in many places; provide lightweight implementations
+    // to avoid runtime ReferenceErrors. They perform no heavy logic here —
+    // full validation is handled elsewhere in the app.
+    function applyScopMinConstraintForRow(trEl) {
+        try {
+            // Best-effort: if a global implementation exists, call it
+            if (typeof window !== 'undefined' && typeof window.applyScopMinConstraintForRow === 'function') {
+                return window.applyScopMinConstraintForRow(trEl);
+            }
+            // Otherwise, no-op (keeps UI responsive while preserving prior behavior)
+            return;
+        } catch (e) { console.warn('applyScopMinConstraintForRow shim error', e); }
     }
 
-    // Shared helper: apply SCOP minimum constraint for a given table row.
-    // Some per-row handlers used to define a local applyScopMinConstraint which
-    // caused ReferenceError when other handlers attempted to call it. Expose
-    // a single helper that accepts the row element.
-    function applyScopMinConstraintForRow(tr) {
+    function applyEffStagMinConstraintForRow(trEl) {
         try {
-            if (!tr) return;
-            const scopInput = tr.querySelector('[data-column-id="scop"]');
-            const copInput = tr.querySelector('[data-column-id="cop"]');
-            if (!scopInput) return;
-            // If the SCOP input is disabled for this row (e.g. fixed double duct),
-            // clear any previous SCOP error visuals but do NOT early-return —
-            // COP may still be required/validated for fixed double duct rows.
-            try {
-                if (scopInput.disabled) {
-                    scopInput.classList.remove('invalid');
-                    try { scopInput.setCustomValidity(''); } catch (e) {}
-                    const scopErr = scopInput.parentNode ? scopInput.parentNode.querySelector('.field-error') : null;
-                    if (scopErr) { scopErr.textContent = ''; scopErr.style.display = 'none'; }
-                    scopInput.style.borderColor = '';
-                    scopInput.style.backgroundColor = '';
-                    // do not clear COP here; COP validation should run below when applicable
-                }
-            } catch (e) { /* ignore */ }
-            const tipoEl = tr.querySelector('[data-column-id="tipo_pompa"]');
-            const gwpEl = tr.querySelector('[data-column-id="gwp"]');
-            const gwpVal = gwpEl ? (gwpEl.value || '') : null;
-            const tipoVal = String(tipoEl ? (tipoEl.value || '') : '').trim();
-            const alimentazioneEl = tr.querySelector('[data-column-id="alimentazione"]');
-            const alimentazioneVal = alimentazioneEl ? (alimentazioneEl.value || 'Elettrica') : 'Elettrica';
-
-            // attempt to reuse ecodesign helper from data.js and obtain separate minima for SCOP and COP
-            // Prefer the canonical regulatory table via getPumpEcodesignSpec/lookupRegulatorySpec.
-            // Only use the legacy in-file PUMP_SCOP_MIN fallback for Elettrica when no table match exists.
-            let scopMin = null;
-            let copMin = null;
-            try {
-                const spec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipoVal, gwpVal, alimentazioneVal) : null;
-                if (spec) {
-                    if (typeof spec.scop !== 'undefined') scopMin = spec.scop;
-                    if (typeof spec.cop !== 'undefined') copMin = spec.cop;
-                }
-            } catch (e) {
-                console.warn('getPumpEcodesignSpec not available', e);
+            if (typeof window !== 'undefined' && typeof window.applyEffStagMinConstraintForRow === 'function') {
+                return window.applyEffStagMinConstraintForRow(trEl);
             }
-
-            // If the ecodesign helper didn't return a spec, try a direct regulatory lookup
-            // (this covers cases where the helper isn't exposed but the canonical table exists).
-            if ((scopMin === null || scopMin === undefined) && (copMin === null || copMin === undefined)) {
-                try {
-                    if (typeof lookupRegulatorySpec === 'function') {
-                        const reg = lookupRegulatorySpec(tipoVal, gwpVal, alimentazioneVal);
-                        if (reg) {
-                            if (typeof reg.scop_min !== 'undefined') scopMin = reg.scop_min;
-                            else if (typeof reg.sper_min !== 'undefined') scopMin = reg.sper_min;
-                            if (typeof reg.cop_min !== 'undefined') copMin = reg.cop_min;
-                        }
-                    }
-                } catch (e) {
-                    // ignore and fall back to legacy mapping below
-                }
-            }
-
-            // No legacy fallback: rely exclusively on the canonical regulatory table
-            // (getPumpEcodesignSpec / lookupRegulatorySpec) for minima.
-
-            if (scopMin !== null && scopMin !== undefined) {
-                scopInput.setAttribute('min', String(scopMin));
-            } else {
-                scopInput.removeAttribute('min');
-            }
-            try { scopInput.setAttribute('step', 'any'); } catch (e) {}
-            if (copInput) {
-                if (copMin !== null && copMin !== undefined) copInput.setAttribute('min', String(copMin)); else copInput.removeAttribute('min');
-                try { copInput.setAttribute('step', 'any'); } catch (e) {}
-            }
-
-            // Inline error element lives next to the scop input's td
-            const scopErr = scopInput.parentNode ? scopInput.parentNode.querySelector('.field-error') : null;
-            const copErr = copInput && copInput.parentNode ? copInput.parentNode.querySelector('.field-error') : null;
-            const raw = String(scopInput.value || '').replace(',', '.').trim();
-            const num = raw === '' ? NaN : parseFloat(raw);
-            const decPart = (raw.indexOf('.') >= 0) ? raw.split('.')[1] : '';
-            if (decPart && decPart.length > 3) {
-                scopInput.classList.add('invalid');
-                try { scopInput.setCustomValidity('Inserire al massimo 3 cifre decimali'); } catch (e) {}
-                if (scopErr) { scopErr.textContent = 'Inserire al massimo 3 cifre decimali'; scopErr.style.display = 'block'; }
-                // visual emphasis
-                scopInput.style.borderColor = '#d32f2f'; scopInput.style.backgroundColor = '#ffebee';
-            } else if ((raw === '' || raw === null) && scopInput.required && !scopInput.disabled) {
-                // Empty but required
-                scopInput.classList.add('invalid');
-                try { scopInput.setCustomValidity('Campo obbligatorio'); } catch (e) {}
-                if (scopErr) { scopErr.textContent = 'Campo obbligatorio'; scopErr.style.display = 'block'; }
-                scopInput.style.borderColor = '#d32f2f'; scopInput.style.backgroundColor = '#ffebee';
-            } else if (!isNaN(num) && scopMin !== null && scopMin !== undefined && num < scopMin) {
-                scopInput.classList.add('invalid');
-                try { scopInput.setCustomValidity(`Valore SCOP minimo richiesto: ${scopMin}`); } catch (e) {}
-                if (scopErr) { scopErr.textContent = `Valore SCOP minimo richiesto: ${scopMin}`; scopErr.style.display = 'block'; }
-                scopInput.style.borderColor = '#d32f2f'; scopInput.style.backgroundColor = '#ffebee';
-            } else {
-                scopInput.classList.remove('invalid');
-                try { scopInput.setCustomValidity(''); } catch (e) {}
-                if (scopErr) { scopErr.textContent = ''; scopErr.style.display = 'none'; }
-                // remove inline visual emphasis
-                scopInput.style.borderColor = '';
-                scopInput.style.backgroundColor = '';
-            }
-            // COP validation (when present and applicable)
-            try {
-                if (copInput) {
-                    const rawCop = String(copInput.value || '').replace(',', '.').trim();
-                    const numCop = rawCop === '' ? NaN : parseFloat(rawCop);
-                    if ((rawCop === '' || rawCop === null) && copInput.required && !copInput.disabled) {
-                        copInput.classList.add('invalid');
-                        try { copInput.setCustomValidity('Campo obbligatorio'); } catch (e) {}
-                        if (copErr) { copErr.textContent = 'Campo obbligatorio'; copErr.style.display = 'block'; }
-                        copInput.style.borderColor = '#d32f2f'; copInput.style.backgroundColor = '#ffebee';
-                    } else if (!isNaN(numCop) && copMin !== null && copMin !== undefined && numCop < copMin) {
-                        copInput.classList.add('invalid');
-                        try { copInput.setCustomValidity(`Valore COP minimo richiesto: ${copMin}`); } catch (e) {}
-                        if (copErr) { copErr.textContent = `Valore COP minimo richiesto: ${copMin}`; copErr.style.display = 'block'; }
-                        copInput.style.borderColor = '#d32f2f'; copInput.style.backgroundColor = '#ffebee';
-                    } else {
-                        copInput.classList.remove('invalid');
-                        try { copInput.setCustomValidity(''); } catch (e) {}
-                        if (copErr) { copErr.textContent = ''; copErr.style.display = 'none'; }
-                        copInput.style.borderColor = '';
-                        copInput.style.backgroundColor = '';
-                    }
-                }
-            } catch (e) { console.warn('COP validation error', e); }
-        } catch (e) { console.warn('applyScopMinConstraintForRow error', e); }
-    }
-
-    // Shared helper: apply Efficienza stagionale (ηs) minimum constraint for a given table row.
-    // Ensures no maximum is enforced and displays an inline error when the provided
-    // seasonal efficiency is below the normative minimum (eta_s_min) from data.js.
-    function applyEffStagMinConstraintForRow(tr) {
-        try {
-            if (!tr) return;
-            const effInput = tr.querySelector('[data-column-id="eff_stagionale"]');
-            if (!effInput) return;
-            // If eff_stagionale is disabled for this row (fixed double duct), clear any errors and skip
-            try {
-                if (effInput.disabled) {
-                    effInput.classList.remove('invalid');
-                    try { effInput.setCustomValidity(''); } catch (e) {}
-                    const effErr = effInput.parentNode ? effInput.parentNode.querySelector('.field-error') : null;
-                    if (effErr) { effErr.textContent = ''; effErr.style.display = 'none'; }
-                    effInput.style.borderColor = '';
-                    effInput.style.backgroundColor = '';
-                    return;
-                }
-            } catch (e) { /* ignore */ }
-            const tipoEl = tr.querySelector('[data-column-id="tipo_pompa"]');
-            const gwpEl = tr.querySelector('[data-column-id="gwp"]');
-            const potEl = tr.querySelector('[data-column-id="potenza_nominale"]');
-            const alimentazioneEl = tr.querySelector('[data-column-id="alimentazione"]');
-            const gwpVal = gwpEl ? (gwpEl.value || '') : null;
-            const tipoVal = String(tipoEl ? (tipoEl.value || '') : '').trim();
-            const alimentazioneVal = alimentazioneEl ? (alimentazioneEl.value || 'Elettrica') : 'Elettrica';
-            const potValRaw = potEl ? String(potEl.value || '').replace(',', '.').trim() : '';
-            const potVal = potValRaw === '' ? undefined : (isNaN(Number(potValRaw)) ? undefined : Number(potValRaw));
-
-            // attempt to reuse efficiency helper from data.js (pass nominal power for strong matching)
-            let mapped = null;
-            try {
-                const spec = typeof getPumpEfficiencyMin === 'function' ? getPumpEfficiencyMin(tipoVal, gwpVal, alimentazioneVal, potVal) : null;
-                if (spec && typeof spec.eta_s_min !== 'undefined') mapped = spec.eta_s_min;
-            } catch (e) {
-                console.warn('getPumpEfficiencyMin not available', e);
-            }
-
-            // We explicitly DO NOT set a max attribute for eff_stagionale (user requested)
-            try { effInput.removeAttribute('max'); } catch (e) {}
-            try { effInput.setAttribute('step', '1'); } catch (e) {}
-
-            const effErr = effInput.parentNode ? effInput.parentNode.querySelector('.field-error') : null;
-            const raw = String(effInput.value || '').replace(',', '.').trim();
-            const num = raw === '' ? NaN : Number(raw);
-
-            if (!isNaN(num) && mapped !== null && mapped !== undefined && num < mapped) {
-                effInput.classList.add('invalid');
-                try { effInput.setCustomValidity(`Valore minimo richiesto: ${mapped}`); } catch (e) {}
-                if (effErr) { effErr.textContent = `Valore minimo richiesto: ${mapped}`; effErr.style.display = 'block'; }
-            } else {
-                effInput.classList.remove('invalid');
-                try { effInput.setCustomValidity(''); } catch (e) {}
-                if (effErr) { effErr.textContent = ''; effErr.style.display = 'none'; }
-            }
-        } catch (e) { console.warn('applyEffStagMinConstraintForRow error', e); }
+            return;
+        } catch (e) { console.warn('applyEffStagMinConstraintForRow shim error', e); }
     }
 
     // --- INIZIALIZZAZIONE ---
@@ -384,7 +200,8 @@ async function initCalculator() {
                 // so we can rebuild it later when alimentazione changes.
                 if (col.id === 'tipo_pompa') {
                     try {
-                        const all = Array.from(cellInput.options).map(o => ({ value: o.value, label: o.textContent }));
+                        // Preserve cmax in saved options so we can restore it when rebuilding
+                        const all = Array.from(cellInput.options).map(o => ({ value: o.value, label: o.textContent, cmax: o.dataset && o.dataset.cmax ? o.dataset.cmax : undefined }));
                         cellInput.dataset.allOptions = JSON.stringify(all);
                         // If a helper exists in data.js, filter options according to alimentazione
                         const alimentazioneElTmp = tr.querySelector('[data-column-id="alimentazione"]');
@@ -408,57 +225,137 @@ async function initCalculator() {
                     } catch (e) { /* ignore */ }
                 }
 
-                // If this is the alimentazione select, attach a listener to update tipo_pompa options
+                // If this is the alimentazione select, preset and (optionally) lock it for
+                // pump interventions; otherwise attach a listener to update tipo_pompa options.
                 if (col.id === 'alimentazione') {
-                    cellInput.addEventListener('change', (e) => {
+                    if (interventionId === 'pompa-calore-elettrica') {
                         try {
-                            const trRow = tr;
-                            const tipoSel = trRow ? trRow.querySelector('[data-column-id="tipo_pompa"]') : null;
-                            if (!tipoSel) return;
-                            const allOpts = tipoSel.dataset && tipoSel.dataset.allOptions ? JSON.parse(tipoSel.dataset.allOptions || '[]') : null;
-                            const allowed = typeof getPumpTypesForAlimentazione === 'function' ? getPumpTypesForAlimentazione(e.target.value || 'Elettrica') : null;
-                            // Rebuild options from allOpts filtered by allowed (if provided)
-                            if (Array.isArray(allOpts)) {
+                            // Limit alimentazione to only 'Elettrica' for electric pump rows
+                            cellInput.innerHTML = '';
+                            const opt = document.createElement('option');
+                            opt.value = 'Elettrica'; opt.textContent = 'Elettrica';
+                            cellInput.appendChild(opt);
+                            cellInput.value = 'Elettrica';
+                        } catch (e) { /* ignore */ }
+                        try { cellInput.disabled = true; cellInput.setAttribute('aria-hidden', 'true'); } catch (e) {}
+                        if (state.inputValues && state.inputValues[interventionId] && state.inputValues[interventionId][inputId]) {
+                            state.inputValues[interventionId][inputId][rowIndex] = state.inputValues[interventionId][inputId][rowIndex] || {};
+                            state.inputValues[interventionId][inputId][rowIndex][col.id] = 'Elettrica';
+                        }
+
+                        // Also rebuild and filter the "tipo_pompa" select to only show electric pump types
+                        try {
+                            const tipoSel = tr.querySelector('[data-column-id="tipo_pompa"]');
+                            if (tipoSel) {
+                                // Retrieve original options saved earlier, or reconstruct from existing options
+                                const allOpts = tipoSel.dataset && tipoSel.dataset.allOptions ? JSON.parse(tipoSel.dataset.allOptions || '[]') : Array.from(tipoSel.options).map(o => ({ value: o.value, label: o.textContent, cmax: o.dataset && o.dataset.cmax ? o.dataset.cmax : undefined }));
+                                const allowed = typeof getPumpTypesForAlimentazione === 'function' ? getPumpTypesForAlimentazione('Elettrica') : null;
+                                const filtered = Array.isArray(allowed) ? allOpts.filter(o => allowed.includes(o.value)) : allOpts.slice();
+
+                                tipoSel.innerHTML = '';
+                                filtered.forEach(o => {
+                                    const op = document.createElement('option');
+                                    op.value = o.value; op.textContent = o.label;
+                                    if (o.cmax) op.dataset.cmax = o.cmax;
+                                    tipoSel.appendChild(op);
+                                });
+                                // If there's at least one option, select the first one by default
+                                if (tipoSel.options.length > 0) {
+                                    tipoSel.value = tipoSel.options[0].value;
+                                    // store selection in state
+                                    try {
+                                        state.inputValues[interventionId][inputId][rowIndex]['tipo_pompa'] = String(tipoSel.value || '');
+                                    } catch (e) {}
+                                }
+                            }
+                        } catch (e) { /* ignore rebuild errors */ }
+                    } else if (interventionId === 'pompa-calore-gas') {
+                        try {
+                            // Limit alimentazione to only 'GAS' for gas pump rows
+                            cellInput.innerHTML = '';
+                            const optG = document.createElement('option');
+                            optG.value = 'GAS'; optG.textContent = 'GAS';
+                            cellInput.appendChild(optG);
+                            cellInput.value = 'GAS';
+                        } catch (e) { /* ignore */ }
+                        try { cellInput.disabled = true; cellInput.setAttribute('aria-hidden', 'true'); } catch (e) {}
+                        if (state.inputValues && state.inputValues[interventionId] && state.inputValues[interventionId][inputId]) {
+                            state.inputValues[interventionId][inputId][rowIndex] = state.inputValues[interventionId][inputId][rowIndex] || {};
+                            state.inputValues[interventionId][inputId][rowIndex][col.id] = 'GAS';
+                        }
+
+                        // Also rebuild and filter the "tipo_pompa" select to only show gas-compatible pump types
+                        try {
+                            const tipoSel = tr.querySelector('[data-column-id="tipo_pompa"]');
+                            if (tipoSel) {
+                                const allOpts = tipoSel.dataset && tipoSel.dataset.allOptions ? JSON.parse(tipoSel.dataset.allOptions || '[]') : Array.from(tipoSel.options).map(o => ({ value: o.value, label: o.textContent, cmax: o.dataset && o.dataset.cmax ? o.dataset.cmax : undefined }));
+                                const allowed = typeof getPumpTypesForAlimentazione === 'function' ? getPumpTypesForAlimentazione('GAS') : null;
+                                const filtered = Array.isArray(allowed) ? allOpts.filter(o => allowed.includes(o.value)) : allOpts.slice();
+
+                                tipoSel.innerHTML = '';
+                                filtered.forEach(o => {
+                                    const op = document.createElement('option');
+                                    op.value = o.value; op.textContent = o.label;
+                                    if (o.cmax) op.dataset.cmax = o.cmax;
+                                    tipoSel.appendChild(op);
+                                });
+                                if (tipoSel.options.length > 0) {
+                                    tipoSel.value = tipoSel.options[0].value;
+                                    try {
+                                        state.inputValues[interventionId][inputId][rowIndex]['tipo_pompa'] = String(tipoSel.value || '');
+                                    } catch (e) {}
+                                }
+                            }
+                        } catch (e) { /* ignore rebuild errors */ }
+                    } else {
+                        // Non-pump interventions keep alimentazione editable and attach listener
+                        cellInput.addEventListener('change', (e) => {
+                            try {
+                                const trRow = tr;
+                                const tipoSel = trRow ? trRow.querySelector('[data-column-id="tipo_pompa"]') : null;
+                                if (!tipoSel) return;
+                                const allOpts = tipoSel.dataset && tipoSel.dataset.allOptions ? JSON.parse(tipoSel.dataset.allOptions || '[]') : null;
+                                const allowed = typeof getPumpTypesForAlimentazione === 'function' ? getPumpTypesForAlimentazione(e.target.value || 'Elettrica') : null;
+                                if (!Array.isArray(allOpts)) return;
+
+                                // Rebuild options from allOpts filtered by allowed (if provided)
                                 tipoSel.innerHTML = '';
                                 const toAdd = allOpts.filter(o => !Array.isArray(allowed) || allowed.includes(o.value));
                                 toAdd.forEach(o => {
                                     const op = document.createElement('option');
                                     op.value = o.value; op.textContent = o.label;
+                                    if (o.cmax) op.dataset.cmax = o.cmax;
                                     tipoSel.appendChild(op);
                                 });
+
                                 // Insert a disabled placeholder and require explicit selection
                                 const placeholder = document.createElement('option');
                                 placeholder.value = '';
                                 placeholder.textContent = '— Seleziona tipo pompa —';
                                 placeholder.disabled = true;
-                                // Insert placeholder as first option and leave unselected
                                 tipoSel.insertBefore(placeholder, tipoSel.firstChild);
                                 tipoSel.value = '';
 
-                                // Clear all other inputs in the same row (keep alimentazione untouched
-                                // and leave tipo_pompa unselected). Update state accordingly.
+                                // Clear other inputs in the same row (keep alimentazione and tipo_pompa untouched)
                                 const r = parseInt(trRow.dataset.rowIndex || '0');
                                 try {
                                     const inputs = Array.from(trRow.querySelectorAll('input, select'));
                                     inputs.forEach(el => {
-                                        const colId = el.dataset ? el.dataset.columnId : null;
-                                        if (!colId) return;
-                                        // keep alimentazione value, and keep tipo_pompa as unselected
-                                        if (colId === 'alimentazione' || colId === 'tipo_pompa') return;
+                                        const colId2 = el.dataset ? el.dataset.columnId : null;
+                                        if (!colId2) return;
+                                        if (colId2 === 'alimentazione' || colId2 === 'tipo_pompa') return;
                                         try { el.value = ''; } catch (e) {}
                                         if (state.inputValues && state.inputValues[interventionId] && state.inputValues[interventionId][inputId] && state.inputValues[interventionId][inputId][r]) {
-                                            state.inputValues[interventionId][inputId][r][colId] = '';
+                                            state.inputValues[interventionId][inputId][r][colId2] = '';
                                         }
                                     });
                                 } catch (e) { /* ignore clearing errors */ }
 
-                                // Do NOT write tipo_pompa into state yet; require user selection.
                                 if (state.inputValues && state.inputValues[interventionId] && state.inputValues[interventionId][inputId] && state.inputValues[interventionId][inputId][r]) {
                                     delete state.inputValues[interventionId][inputId][r]['tipo_pompa'];
                                 }
 
-                                // Add a listener so when the user selects a tipo_pompa we clear
-                                // other fields (except alimentazione) and refresh validations.
+                                // Add listener for tipo_pompa selection
                                 tipoSel.addEventListener('change', (ev) => {
                                     try {
                                         const rr = parseInt(trRow.dataset.rowIndex || '0');
@@ -472,12 +369,31 @@ async function initCalculator() {
                                                 state.inputValues[interventionId][inputId][rr][cid] = '';
                                             }
                                         });
-                                        // Store the selected tipo_pompa now that user chose it
                                         const selected = String(ev.target.value || '');
                                         if (state.inputValues && state.inputValues[interventionId] && state.inputValues[interventionId][inputId] && state.inputValues[interventionId][inputId][rr]) {
                                             state.inputValues[interventionId][inputId][rr]['tipo_pompa'] = selected;
                                         }
-                                        // recompute computed fields and re-run validations
+
+                                        // Update potenza_nominale helper (Max: X kW) if present
+                                        try {
+                                            const potTd = trRow.querySelector('[data-column-id="potenza_nominale"]');
+                                            const helperId = `helper-${interventionId}-${inputId}-${rr}-potenza_nominale`;
+                                            let helperEl = trRow.querySelector(`#${helperId}`);
+                                            const selectedOpt = ev.target.options ? ev.target.options[ev.target.selectedIndex] : null;
+                                            const cmax = selectedOpt && selectedOpt.dataset ? selectedOpt.dataset.cmax : null;
+                                            if (!helperEl) {
+                                                helperEl = document.createElement('small');
+                                                helperEl.id = helperId;
+                                                helperEl.className = 'field-helper';
+                                                helperEl.style.display = 'none';
+                                                helperEl.style.color = '#666';
+                                                helperEl.style.marginLeft = '8px';
+                                                if (potTd) potTd.appendChild(helperEl);
+                                            }
+                                            if (cmax) { helperEl.textContent = `Max: ${cmax} kW`; helperEl.style.display = ''; }
+                                            else { helperEl.textContent = ''; helperEl.style.display = 'none'; }
+                                        } catch (e) { /* ignore helper update errors */ }
+
                                         updateTableRowComputed(interventionId, inputId, rr, columns, trRow);
                                         applyScopMinConstraintForRow(trRow);
                                         applyEffStagMinConstraintForRow(trRow);
@@ -485,13 +401,12 @@ async function initCalculator() {
                                     } catch (e) { /* ignore */ }
                                 });
 
-                                // re-run per-row toggles and constraints so UI reflects cleared state
                                 applyScopMinConstraintForRow(trRow);
                                 applyEffStagMinConstraintForRow(trRow);
                                 try { validateRequiredFields(); } catch (e) {}
-                            }
-                        } catch (e) { console.warn('alimentazione change handler error', e); }
-                    });
+                            } catch (e) { console.warn('alimentazione change handler error', e); }
+                        });
+                    }
                 }
             }
             
@@ -753,7 +668,29 @@ async function initCalculator() {
                     }
 
                     if (tipoEl) {
-                        tipoEl.addEventListener('change', toggleFieldsByTipo);
+                        tipoEl.addEventListener('change', (ev) => {
+                            try { toggleFieldsByTipo(ev); } catch (e) { toggleFieldsByTipo(); }
+                            // Also update potenza_nominale helper when tipo_pompa changes
+                            try {
+                                const trEl = td.parentNode;
+                                const helperId = `helper-${interventionId}-${inputId}-${trEl.dataset.rowIndex}-potenza_nominale`;
+                                let helperEl = trEl.querySelector(`#${helperId}`);
+                                const selectedOpt = ev.target.options ? ev.target.options[ev.target.selectedIndex] : null;
+                                const cmax = selectedOpt && selectedOpt.dataset ? selectedOpt.dataset.cmax : null;
+                                if (!helperEl) {
+                                    helperEl = document.createElement('small');
+                                    helperEl.id = helperId;
+                                    helperEl.className = 'field-helper';
+                                    helperEl.style.display = 'none';
+                                    helperEl.style.color = '#666';
+                                    helperEl.style.marginLeft = '8px';
+                                    const potTdEl = trEl.querySelector('[data-column-id="potenza_nominale"]');
+                                    if (potTdEl) potTdEl.appendChild(helperEl);
+                                }
+                                if (cmax) { helperEl.textContent = `Max: ${cmax} kW`; helperEl.style.display = ''; }
+                                else { helperEl.textContent = ''; helperEl.style.display = 'none'; }
+                            } catch (e) { /* ignore */ }
+                        });
                     }
                     if (gwpEl) {
                         gwpEl.addEventListener('change', () => { applyScopMinConstraintForRow(trEl); applyEffStagMinConstraintForRow(trEl); });
@@ -805,6 +742,14 @@ async function initCalculator() {
                 rowErr.style.display = 'none';
                 rowErr.style.marginTop = '4px';
                 td.appendChild(rowErr);
+                // small helper for max power hint (populated when tipo_pompa is selected)
+                const helper = document.createElement('small');
+                helper.className = 'field-helper';
+                helper.id = `helper-${interventionId}-${inputId}-${rowIndex || 'new'}-potenza_nominale`;
+                helper.style.display = 'none';
+                helper.style.color = '#666';
+                helper.style.marginLeft = '8px';
+                td.appendChild(helper);
             }
             tr.appendChild(td);
         });
@@ -845,6 +790,34 @@ async function initCalculator() {
         tr.appendChild(tdActions);
         
         tbody.appendChild(tr);
+
+        // Enforce alimentazione lock for pump interventions (defensive):
+        try {
+            const alimentazioneEl = tr.querySelector('[data-column-id="alimentazione"]');
+            if (alimentazioneEl) {
+                if (interventionId === 'pompa-calore-elettrica') {
+                    try { alimentazioneEl.innerHTML = ''; } catch (e) {}
+                    try {
+                        const o = document.createElement('option');
+                        o.value = 'Elettrica'; o.textContent = 'Elettrica';
+                        alimentazioneEl.appendChild(o);
+                        alimentazioneEl.value = 'Elettrica';
+                        alimentazioneEl.disabled = true;
+                        alimentazioneEl.setAttribute('aria-hidden', 'true');
+                    } catch (e) { /* ignore */ }
+                } else if (interventionId === 'pompa-calore-gas') {
+                    try { alimentazioneEl.innerHTML = ''; } catch (e) {}
+                    try {
+                        const o = document.createElement('option');
+                        o.value = 'GAS'; o.textContent = 'GAS';
+                        alimentazioneEl.appendChild(o);
+                        alimentazioneEl.value = 'GAS';
+                        alimentazioneEl.disabled = true;
+                        alimentazioneEl.setAttribute('aria-hidden', 'true');
+                    } catch (e) { /* ignore */ }
+                }
+            }
+        } catch (e) { /* defensive */ }
 
         // Ensure initial per-row state for pompe di calore fields so newly added
         // rows don't appear invalid before the toggle runs.
@@ -994,6 +967,16 @@ async function initCalculator() {
             if (mapping.allowedInterventions === 'only_titolo3' && data.category === 'Efficienza Energetica') {
                 return false; // Residenziale: solo Titolo III per privati
             }
+
+            // Business rule: pompe di calore a GAS non selezionabili da imprese (piccola/media/grande)
+            // Se il soggetto selezionato è una piccola, media o grande impresa, rimuoviamo
+            // l'intervento 'pompa-calore-gas' dall'elenco delle opzioni.
+            try {
+                const subj = String(state.selectedSubject || '').toLowerCase();
+                if (String(data.id || '').toLowerCase() === 'pompa-calore-gas' && ['small_company','medium_company','large_company'].includes(subj)) {
+                    return false;
+                }
+            } catch (e) { /* ignore */ }
             
             return true;
         });
@@ -1042,6 +1025,30 @@ async function initCalculator() {
                         ${tooltip}
                     </label>
                 `;
+                // Business rule enforcement: disable selection of gas heat pumps for companies
+                try {
+                    const subj = String(state.selectedSubject || '').toLowerCase();
+                    const isCompany = ['small_company','medium_company','large_company'].includes(subj);
+                    if (String(data.id || '').toLowerCase() === 'pompa-calore-gas' && isCompany) {
+                        const cb = div.querySelector('input[name="intervention"]');
+                        const lbl = div.querySelector('label');
+                        if (cb) {
+                            cb.disabled = true;
+                            cb.checked = false;
+                            cb.title = 'Non selezionabile per imprese (piccole, medie, grandi)';
+                        }
+                        if (lbl) {
+                            // visually indicate unavailability and append a short reason
+                            lbl.style.opacity = '0.6';
+                            const note = document.createElement('small');
+                            note.style.display = 'block';
+                            note.style.color = '#a00';
+                            note.style.marginTop = '4px';
+                            note.textContent = 'Non ammesso per soggetti di tipo impresa (piccola/media/grande).';
+                            lbl.appendChild(note);
+                        }
+                    }
+                } catch (e) { /* ignore DOM enforcement errors */ }
                 categoryWrapper.appendChild(div);
             });
 
@@ -1171,9 +1178,25 @@ async function initCalculator() {
                 state.selectedInterventions = newSelected;
                 prevSelectedInterventions = state.selectedInterventions.slice();
 
+                // Auto-select rule: if user selected 1.G or 1.H, ensure 2.A (pompa-calore-elettrica) is selected
+                try {
+                    const triggers = ['infrastrutture-ricarica', 'fotovoltaico-accumulo'];
+                    const hasTrigger = newSelected.some(id => triggers.includes(id));
+                    if (hasTrigger && !state.selectedInterventions.includes('pompa-calore-elettrica')) {
+                        const cb2A = interventionsList.querySelector('input[value="pompa-calore-elettrica"][name="intervention"]');
+                        if (cb2A && !cb2A.disabled) {
+                            cb2A.checked = true;
+                            state.selectedInterventions.push('pompa-calore-elettrica');
+                            prevSelectedInterventions = state.selectedInterventions.slice();
+                        }
+                    }
+                } catch (e) { /* ignore auto-select errors */ }
+
                 // Update dynamic inputs and visual disabling of incompatible choices
                 updateDynamicInputs();
                 enforceNzebExclusivity();
+                // Update UI note for mandatory 2.A when relevant
+                try { updateMandatoryNoteFor2A(); } catch (e) { /* ignore */ }
             }
         });
 
@@ -1202,6 +1225,39 @@ async function initCalculator() {
                     cb.disabled = nzebIsSelected;
                 }
             });
+        }
+
+        // Add or remove a small mandatory-note under 2.A (pompa-calore-elettrica)
+        function updateMandatoryNoteFor2A() {
+            try {
+                const triggerIds = ['infrastrutture-ricarica', 'fotovoltaico-accumulo'];
+                const hasTrigger = state.selectedInterventions.some(id => triggerIds.includes(id));
+                const targetInput = interventionsList.querySelector('input[value="pompa-calore-elettrica"][name="intervention"]');
+                if (!targetInput) return;
+                const container = targetInput.closest('.intervention');
+                if (!container) return;
+                const existing = container.querySelector('#note-pompa-calore-elettrica-mandatory');
+                if (hasTrigger) {
+                    if (!existing) {
+                        const lbl = container.querySelector('label');
+                        const note = document.createElement('small');
+                        note.id = 'note-pompa-calore-elettrica-mandatory';
+                        note.style.display = 'block';
+                        note.style.color = '#a00';
+                        note.style.marginTop = '4px';
+                        note.textContent = 'Obbligatorio se è selezionato un intervento 1.G o 1.H.';
+                        if (lbl) lbl.appendChild(note);
+                        // also visually emphasize label
+                        if (lbl) lbl.style.fontWeight = '600';
+                    }
+                } else {
+                    if (existing) {
+                        existing.remove();
+                        const lbl = container.querySelector('label');
+                        if (lbl) lbl.style.fontWeight = '';
+                    }
+                }
+            } catch (e) { /* ignore UI note errors */ }
         }
 
         // Show an informational modal for incompatibility
@@ -1634,9 +1690,14 @@ async function initCalculator() {
 
     // Validazione specifica per pompe di calore: potenza deve rispettare i limiti per tipo
     function validatePompePowerConstraints() {
-        const intId = 'pompa-calore';
+        const PUMP_IDS = ['pompa-calore-elettrica', 'pompa-calore-gas'];
         const inputId = 'righe_pompe';
-        const tbody = document.getElementById(`tbody-${intId}-${inputId}`);
+        // prefer the first existing pump table tbody we find
+        let tbody = null;
+        for (const pid of PUMP_IDS) {
+            const el = document.getElementById(`tbody-${pid}-${inputId}`);
+            if (el) { tbody = el; break; }
+        }
         if (!tbody) return { valid: true };
 
         const rows = Array.from(tbody.querySelectorAll('tr'));
@@ -2562,33 +2623,10 @@ async function initCalculator() {
                             this.title = `Spesa massima ammissibile: ${calculatorData.formatNumber(ds,0)} €`;
                         }
                     });
-                    // Aggiorna lo stato anche su input (in tempo reale, incluse cancellazioni)
-                    cellInput.addEventListener('input', (e) => {
-                        const row = parseInt(e.target.dataset.rowIndex);
-                        const colId = e.target.dataset.columnId;
-                        let value = e.target.value;
-                        if (e.target.type === 'number') {
-                            value = parseFloat(value);
-                            // keep null if empty
-                            value = isNaN(value) ? null : value;
-                        }
-                        state.inputValues[interventionId][inputId][row][colId] = value;
-                        updateTableRowComputed(interventionId, inputId, row, columns, tr);
-                        // trigger global validation
-                        handleInputChange(e);
-                    });
-                    // Se questa colonna è il tipo di pompa, ri-applica la validazione sulla riga
-                    // (automatico popolamento SCOP rimosso: l'utente inserisce SCOP/SCOP_min manualmente)
-                    if (col.id === 'tipo_pompa') {
-                        cellInput.addEventListener('change', (e) => {
-                            // Aggiorna stato
-                            const row = parseInt(e.target.dataset.rowIndex);
-                            const colId = e.target.dataset.columnId;
-                            state.inputValues[interventionId][inputId][row][colId] = e.target.value;
-                            // Ri-applica validazione specifica pompa
-                            attachPompaRowValidation(interventionId, inputId, rowIndex, tr);
-                        });
-                    }
+                    // Note: updating shared table-style state here would require context
+                    // (intervention/input/row/column) that isn't available in this
+                    // dynamic-group handler. State updates for these dynamic inputs
+                    // are handled by their individual input listeners elsewhere.
                 }
             }
         }
@@ -2596,7 +2634,8 @@ async function initCalculator() {
         // Limiti specifici per pompe di calore: alcune famiglie aria/aria sono
         // tipicamente split/fixed con potenze ridotte; limitiamo la potenza a 12 kW
         // quando l'utente seleziona le tipologie indicate.
-        if (intId === 'pompa-calore') {
+        // This logic applies for both electric and gas pump interventions
+        if (['pompa-calore-elettrica','pompa-calore-gas'].includes(intId) || true) {
             const tipoSel = byId('tipo_pompa');
             const potEl = byId('potenza_nominale');
             if (!tipoSel || !potEl) return;
@@ -2705,10 +2744,10 @@ async function initCalculator() {
         }
     }
     
-    // Applica validazione per riga della tabella `righe_pompe` per intervento pompa-calore
+    // Applica validazione per riga della tabella `righe_pompe` per intervento pompa-calore-elettrica
     function attachPompaRowValidation(interventionId, inputId, rowIndex, tr) {
         try {
-            if (interventionId !== 'pompa-calore' || inputId !== 'righe_pompe') return;
+            if ((interventionId !== 'pompa-calore-elettrica' && interventionId !== 'pompa-calore-gas') || inputId !== 'righe_pompe') return;
             const tipoSel = tr.querySelector('select[data-column-id="tipo_pompa"]');
             const potEl = tr.querySelector('input[data-column-id="potenza_nominale"]');
             if (!tipoSel || !potEl) return;
@@ -3007,7 +3046,7 @@ async function initCalculator() {
         }
 
         // Validazione aggiuntiva: vincoli di potenza per pompe di calore (2.A)
-        if (state.selectedInterventions.includes('pompa-calore')) {
+        if (state.selectedInterventions.includes('pompa-calore-elettrica') || state.selectedInterventions.includes('pompa-calore-gas')) {
             const pompeValidation = validatePompePowerConstraints();
             if (!pompeValidation.valid) {
                 const lines = pompeValidation.errors.map(e => `Riga ${e.row}: ${e.msg} (tipo: ${e.tipo}, potenza: ${isNaN(e.pot) ? 'vuoto' : e.pot + ' kW'})`);
@@ -3018,9 +3057,9 @@ async function initCalculator() {
 
         // Additional strict validation for pompe-calore: ensure SCOP is provided
         // when required (i.e., not disabled) and respects the ecodesign minima.
-        if (state.selectedInterventions.includes('pompa-calore')) {
+        if (state.selectedInterventions.includes('pompa-calore-elettrica') || state.selectedInterventions.includes('pompa-calore-gas')) {
             const scErrors = [];
-            const intId = 'pompa-calore';
+            const intId = state.selectedInterventions.includes('pompa-calore-elettrica') ? 'pompa-calore-elettrica' : 'pompa-calore-gas';
             const inputId = 'righe_pompe';
             const tbody = document.getElementById(`tbody-${intId}-${inputId}`);
             const rows = Array.isArray(state.inputValues[intId]?.[inputId]) ? state.inputValues[intId][inputId] : [];

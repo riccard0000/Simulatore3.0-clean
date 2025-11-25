@@ -25,8 +25,8 @@ function getKpFromExplain(explainObj) {
 
 console.log('Running KP GAS pump tests...');
 
-const pompa = calculatorData.interventions && calculatorData.interventions['pompa-calore'];
-if (!pompa) { console.error('pompa-calore intervention not found'); process.exit(2); }
+const pompa = calculatorData.interventions && calculatorData.interventions['pompa-calore-elettrica'];
+if (!pompa) { console.error('pompa-calore-elettrica intervention not found'); process.exit(2); }
 
 // Case 1: GAS split/multisplit, use eff_stagionale / eta_s_min (fallback to electric minima if GAS not provided)
 const params1 = {
@@ -35,7 +35,7 @@ const params1 = {
         { tipo_pompa: 'aria/aria split/multisplit', potenza_nominale: 10, scop: 4.0, cop: null, eff_stagionale: 160, gwp: '>150', alimentazione: 'GAS' }
     ]
 };
-const expl1 = pompa.explain(params1, 'private_tertiary_small', { selectedInterventions: ['pompa-calore'] });
+const expl1 = pompa.explain(params1, 'private_tertiary_small', { selectedInterventions: ['pompa-calore-elettrica'] });
 console.log('Explain steps (GAS case1):');
 console.log(expl1.steps.join('\n'));
 const kp1 = getKpFromExplain(expl1);
