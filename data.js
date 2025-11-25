@@ -2135,7 +2135,14 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
                 const basePercentuale = isArt48ter ? 1.0 : 0.20;
                 const percentualeApplicata = isArt48ter ? 1.0 : (basePercentuale + registroAdd);
-                const pDesc = (percentualeApplicata === 1.0) ? '100% (Art.48-ter)' : `${calculatorData.formatNumber((basePercentuale+registroAdd)*100,0)}% (base 20% + registro)`;
+                let pDesc;
+                if (percentualeApplicata === 1.0) {
+                    pDesc = '100% (Art.48-ter)';
+                } else if (registroAdd > 0) {
+                    pDesc = `${calculatorData.formatNumber((basePercentuale+registroAdd)*100,0)}% (base 20% + registro)`;
+                } else {
+                    pDesc = `${calculatorData.formatNumber((basePercentuale)*100,0)}% (base 20%)`;
+                }
 
                 steps.push(`Potenza FV (kWp): ${p}`);
                 steps.push(`Capacità accumulo (kWh): ${k}`);
