@@ -3478,20 +3478,10 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 });
             }
 
-        // Maggiorazioni PMI automatiche (Titolo V - Regole Applicative CT 3.0)
-        // Piccole imprese: +20% automatico (applicato numericamente, non mostrato come voce separata)
-        if (operatorType === 'private_tertiary_small') {
-            const smallCompanyBonus = sumBaseIncentives * 0.20;
-            totalIncentive += smallCompanyBonus;
-            // intentionally do not push a separate appliedGlobalPremiums entry to avoid cluttering per-intervention details
-        }
-
-        // Medie imprese: +10% automatico (applicato numericamente, non mostrato as voce separata)
-        if (operatorType === 'private_tertiary_medium') {
-            const mediumCompanyBonus = sumBaseIncentives * 0.10;
-            totalIncentive += mediumCompanyBonus;
-            // intentionally do not push a separate appliedGlobalPremiums entry to avoid cluttering per-intervention details
-        }
+        // NOTE: removed automatic aggregate PMI maggiorations here
+        // The PMI bonuses (small/medium company percents) are already applied
+        // inside individual intervention calculations (via determinePercentuale/getMassimaleSoggetto).
+        // Applying them again at the aggregate level caused double-counting and has been removed.
 
         // Diagnosi energetica: +1000€ fissi
         if (globalPremiums.includes('diagnosi-energetica')) {
