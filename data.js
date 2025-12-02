@@ -2758,7 +2758,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 { id: 'scop', name: 'SCOP pompa di calore', type: 'number', step: 0.01 },
                 { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] }
             ],
-            calculate: (params, operatorType) => {
+            calculate: (params, operatorType, contextData) => {
                 const { tipo_sistema, potenza_pdc, scop, zona_climatica } = params;
                 if (!potenza_pdc || !scop || !zona_climatica) return 0;
                 // For sistemi ibridi we assume a typical pump type aria/acqua for ecodesign minima
@@ -2843,74 +2843,222 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
         },
         'biomassa': {
             name: '2.C - Sostituzione con generatori a biomassa',
-            description: 'Art. 8, comma 1, lett. c) - Sostituzione di generatori di calore esistenti con caldaie, stufe o termocamini alimentati a biomassa (pellet, legna) ad alta efficienza e basse emissioni.',
+            description: 'Art. 8, comma 1, lett. c) - Sostituzione di generatori di calore esistenti con caldaie, stufe o termocamini alimentati a biomassa (pellet, legna) ad alta efficienza e basse emissioni. Formula caldaie: Ia_annuo = Pn × Hr × Ci × Ce. Formula stufe/termocamini: Ia_annuo = 3.35 × ln(Pn) × Hr × Ci × Ce.',
             category: 'Fonti Rinnovabili',
                 allowedOperators: ['pa', 'private_tertiary_person', 'private_tertiary_small', 'private_tertiary_medium', 'private_tertiary_large', 'private_residential'],
                 restrictionNote: 'Ammesso per tutti i soggetti. Biomassa è fonte rinnovabile, non combustibile fossile.',
             inputs: [
                 { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0, help: 'Necessario per calcolo premialità 100%' },
-                { id: 'tipo_generatore', name: 'Tipo generatore', type: 'select', options: ['Caldaia a biomassa', 'Stufa a pellet', 'Stufa a legna', 'Termocamino'] },
-                { id: 'potenza_nominale', name: 'Potenza termica nominale Pn (kW)', type: 'number', min: 0, step: 0.1 },
-                { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] },
-                { id: 'riduzione_emissioni', name: 'Riduzione emissioni particolato vs DM 186/2017 classe 5 stelle', type: 'select', options: ['Fino al 20%', 'Dal 20% al 50%', 'Oltre il 50%'] },
-                { id: 'centrale_teleriscaldamento', name: 'Installato presso centrale teleriscaldamento?', type: 'select', options: ['No', 'Sì'] }
+                { id: 'centrale_teleriscaldamento', name: 'Installato presso centrale teleriscaldamento?', type: 'select', options: ['No', 'Sì'] },
+                { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'], help: 'La zona climatica è inserita una sola volta per l\'intervento; verrà ereditata da tutte le righe.' },
+                {
+                    id: 'righe_biomassa',
+                    name: 'Tabella generatori a biomassa',
+                    type: 'table',
+                    columns: [
+                        { id: 'tipo_generatore', name: 'Tipo generatore', type: 'select', options: ['Caldaia a biomassa', 'Termocamini e stufe a pellet', 'Termocamini e stufe a legna'], optional: false },
+                        { id: 'potenza_nominale', name: 'Potenza termica nominale Pn (kW)', type: 'number', min: 0, step: 0.1 },
+                        { id: 'riduzione_emissioni', name: 'Riduzione emissioni particolato rispetto a DM186/2017 (percentuale)', type: 'select', options: ['Fino al 20%', 'Dal 20% al 50%', 'Oltre il 50%'] },
+                        { id: 'emissioni_classe', name: 'Classe emissioni (DM186/2017)', type: 'select', options: ['5','4','3','2','1'], optional: true }
+                    ],
+                    help: 'Aggiungi una riga per ogni generatore presente nell\'impianto. Le righe verranno valutate separatamente e sommate. La zona climatica è ereditata dal campo principale dell\'intervento. Per stufe/termocamini il valore di Ci è disponibile solo per Pn ≤ 35 kW.'
+                }
             ],
-            calculate: (params, operatorType) => {
-                const { tipo_generatore, potenza_nominale, zona_climatica, riduzione_emissioni, centrale_teleriscaldamento } = params;
-                if (!potenza_nominale || !zona_climatica || !riduzione_emissioni) return 0;
-                
+            calculate: (params, operatorType, contextData) => {
+                const rows = Array.isArray(params?.righe_biomassa) ? params.righe_biomassa : [];
+                if (rows.length === 0) return 0;
+
                 // Tabella 11: Hr ore di funzionamento per zona climatica
                 const hrTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
-                const hr = hrTable[zona_climatica];
-                
-                // Tabella 12/13: Coefficiente Ce per emissioni
-                let ce;
-                if (riduzione_emissioni === 'Fino al 20%') ce = 1.0;
-                else if (riduzione_emissioni === 'Dal 20% al 50%') ce = 1.2;
-                else ce = 1.5; // Oltre 50%
-                
-                // Tabella 10: Ci coefficiente di valorizzazione
-                let ci;
-                if (tipo_generatore === 'Caldaia a biomassa') {
-                    if (potenza_nominale <= 35) ci = 0.060;
-                    else if (potenza_nominale <= 500) ci = 0.025;
-                    else ci = 0.020;
-                } else if (tipo_generatore.includes('pellet')) {
-                    ci = 0.055; // Solo per Pn ≤ 35 kW
-                } else { // Stufa a legna o Termocamino
-                    ci = 0.045; // Solo per Pn ≤ 35 kW
+
+                const ceMap = {
+                    'Fino al 20%': 1.0,
+                    'Dal 20% al 50%': 1.2,
+                    'Oltre il 50%': 1.5
+                };
+
+                let totalIncentive = 0;
+                const centralFlag = params?.centrale_teleriscaldamento || 'No';
+
+                const topZona = params?.zona_climatica || null;
+                if (!topZona) return 0;
+
+                for (const row of rows) {
+                    const tipo = row?.tipo_generatore || '';
+                    const Pn = Number(row?.potenza_nominale) || 0;
+                    const rid = row?.riduzione_emissioni || null;
+                    if (!tipo || !Pn || !rid) continue;
+
+                    const Hr = hrTable[topZona] || 0;
+                    const Ce = (typeof ceMap[rid] !== 'undefined') ? ceMap[rid] : 1.0;
+
+                    // Tabella 10: Ci
+                    let Ci = null;
+                    const tlow = (tipo || '').toLowerCase();
+                    const isPellet = tlow.includes('pellet');
+                    const isLegnaOrTermo = tlow.includes('legna') || tlow.includes('termocam');
+
+                    if (tipo === 'Caldaia a biomassa') {
+                        if (Pn <= 35) Ci = 0.060;
+                        else if (Pn <= 500) Ci = 0.025;
+                        else Ci = 0.020;
+                    } else if (isPellet) {
+                        // Termocamini e stufe a pellet: Ci available only for Pn ≤ 35 kW
+                        if (Pn <= 35) Ci = 0.055;
+                    } else if (isLegnaOrTermo) {
+                        // Termocamini e stufe a legna: Ci available only for Pn ≤ 35 kW
+                        if (Pn <= 35) Ci = 0.045;
+                    }
+
+                    // Enforce explicit ban on Pn > 35 for stove categories (pellet / legna)
+                    if ((isPellet || isLegnaOrTermo) && Pn > 35) {
+                        // skip this row: insertion of powers >35 kW not allowed for these categories
+                        continue;
+                    }
+
+                    if (Ci === null) continue; // not eligible or missing Ci
+
+                    let Ia_annuo = 0;
+                    if (tipo === 'Caldaia a biomassa') {
+                        Ia_annuo = Pn * Hr * Ci * Ce;
+                    } else {
+                        // guard against non-positive Pn for log
+                        Ia_annuo = 3.35 * Math.log(Math.max(Pn, 1)) * Hr * Ci * Ce;
+                    }
+
+                    if (centralFlag === 'Sì') Ia_annuo *= 0.80;
+
+                    const durata = (Pn > 35) ? 5 : 2;
+                    totalIncentive += Ia_annuo * durata;
                 }
-                
-                // Formula varia per tipo generatore
-                let incentivo_annuo;
-                if (tipo_generatore === 'Caldaia a biomassa') {
-                    // Formula: Ia_tot = Pn × Hr × Ci × Ce
-                    incentivo_annuo = potenza_nominale * hr * ci * ce;
-                } else {
-                    // Formula per stufe/termocamini: Ia_tot = 3.35 × ln(Pn) × Hr × Ci × Ce
-                    incentivo_annuo = 3.35 * Math.log(potenza_nominale) * hr * ci * ce;
+
+                // Apply cap based on user-declared total cost and percentuale determinata centralmente
+                contextData = contextData || {};
+                const costInput = Number(params?.costo_totale) || 0;
+                let detP = 0;
+                try {
+                    const sel = Array.isArray(contextData?.selectedInterventions) ? contextData.selectedInterventions : [];
+                    const det = calculatorData.determinePercentuale(sel, params || {}, operatorType || '', contextData || {}, 'biomassa');
+                    detP = (det && typeof det.p === 'number') ? det.p : 0;
+                } catch (e) {
+                    detP = 0;
                 }
-                
-                // Riduzione 20% se presso centrale teleriscaldamento
-                if (centrale_teleriscaldamento === 'Sì') {
-                    incentivo_annuo *= 0.80;
-                }
-                
-                // Incentivo totale
-                const durata = operatorType === 'pa' ? 5 : 2;
-                return incentivo_annuo * durata;
+
+                const cap = detP * costInput;
+                const cappedTotal = (cap > 0) ? Math.min(totalIncentive, cap) : totalIncentive;
+
+                return cappedTotal;
             },
-            explain: (params, operatorType) => {
-                const { tipo_generatore, potenza_nominale, zona_climatica, riduzione_emissioni, centrale_teleriscaldamento } = params;
+            explain: (params, operatorType, contextData) => {
+                const rows = Array.isArray(params?.righe_biomassa) ? params.righe_biomassa : [];
                 const hrTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
-                const Hr = hrTable[zona_climatica]||0; const Pn=potenza_nominale||0;
-                let Ce; if (riduzione_emissioni==='Fino al 20%') Ce=1.0; else if (riduzione_emissioni==='Dal 20% al 50%') Ce=1.2; else Ce=1.5;
-                let Ci; if (tipo_generatore==='Caldaia a biomassa'){ if (Pn<=35) Ci=0.060; else if (Pn<=500) Ci=0.025; else Ci=0.020; }
-                else if (tipo_generatore?.includes('pellet')) Ci=0.055; else Ci=0.045;
-                let Ia_annuo; if (tipo_generatore==='Caldaia a biomassa'){ Ia_annuo = Pn * Hr * Ci * Ce; } else { Ia_annuo = 3.35 * Math.log(Math.max(Pn,1)) * Hr * Ci * Ce; }
-                if (centrale_teleriscaldamento==='Sì') Ia_annuo*=0.80;
-                const durata = operatorType==='pa'?5:2; const tot=Ia_annuo*durata;
-                return { result: tot, formula:`Ia_tot = f(tipo) × Hr × Ci × Ce × durata${centrale_teleriscaldamento==='Sì'?' × 0.80 (teleriscaldamento)':''}`, variables:{tipo:tipo_generatore,Pn,Hr,Ci,Ce,durata} };
+                const ceMap = { 'Fino al 20%':1.0, 'Dal 20% al 50%':1.2, 'Oltre il 50%':1.5 };
+                const steps = [];
+                let total = 0;
+                const centralFlag = params?.centrale_teleriscaldamento || 'No';
+
+                if (rows.length === 0) {
+                    steps.push('Nessuna riga biomassa inserita.');
+                    return { result: 0, steps };
+                }
+
+                const topZonaExp = params?.zona_climatica || null;
+                if (!topZonaExp) {
+                    steps.push('Zona climatica non fornita a livello di intervento: nessuna riga elaborata.');
+                    return { result: 0, steps };
+                }
+
+                rows.forEach((row, idx) => {
+                    const tipo = row?.tipo_generatore || '';
+                    const Pn = Number(row?.potenza_nominale) || 0;
+                    const rid = row?.riduzione_emissioni || 'N/D';
+                    if (!tipo || !Pn || !rid) {
+                        steps.push(`Riga ${idx+1}: parametri incompleti, ignorata.`);
+                        return;
+                    }
+                    const Hr = hrTable[topZonaExp] || 0;
+                    const Ce = (typeof ceMap[rid] !== 'undefined') ? ceMap[rid] : 1.0;
+
+                    let Ci = null;
+                    const tlow = (tipo || '').toLowerCase();
+                    const isPellet = tlow.includes('pellet');
+                    const isLegnaOrTermo = tlow.includes('legna') || tlow.includes('termocam');
+
+                    if (tipo === 'Caldaia a biomassa') {
+                        if (Pn <= 35) Ci = 0.060;
+                        else if (Pn <= 500) Ci = 0.025;
+                        else Ci = 0.020;
+                    } else if (isPellet) {
+                        if (Pn <= 35) Ci = 0.055;
+                    } else if (isLegnaOrTermo) {
+                        if (Pn <= 35) Ci = 0.045;
+                    }
+
+                    if ((isPellet || isLegnaOrTermo) && Pn > 35) {
+                        steps.push(`Riga ${idx+1} (${tipo} - Pn=${Pn} kW): POTENZA NON AMMESSA per questa tipologia (max 35 kW) → riga ignorata.`);
+                        return;
+                    }
+
+                    if (Ci === null) {
+                        steps.push(`Riga ${idx+1} (${tipo} - Pn=${Pn} kW): non è disponibile un coefficiente Ci per questa fascia di potenza → riga ignorata.`);
+                        return;
+                    }
+
+                    let Ia_annuo;
+                    if (tipo === 'Caldaia a biomassa') Ia_annuo = Pn * Hr * Ci * Ce;
+                    else Ia_annuo = 3.35 * Math.log(Math.max(Pn,1)) * Hr * Ci * Ce;
+
+                    if (centralFlag === 'Sì') Ia_annuo *= 0.80;
+                    const durata = (Pn > 35) ? 5 : 2;
+                    const totale = Ia_annuo * durata;
+                    total += totale;
+
+                    steps.push(`Riga ${idx+1} (${tipo} - Pn=${Pn} kW, zona ${topZonaExp}):`);
+                    steps.push(`• Hr = ${Hr} h/anno`);
+                    steps.push(`• Riduzione PM → Ce = ${Ce}`);
+                    steps.push(`• Ci = ${Ci} €/kWh`);
+                    if (tipo === 'Caldaia a biomassa') {
+                        steps.push('• Formula: Ia_annuo = Pn × Hr × Ci × Ce');
+                    } else {
+                        steps.push('• Formula: Ia_annuo = 3.35 × ln(Pn) × Hr × Ci × Ce');
+                    }
+                    steps.push(`• Ia_annuo = ${calculatorData.formatNumber(Ia_annuo,2)} €` + (centralFlag==='Sì' ? ' (ridotto del 20% per teleriscaldamento)' : ''));
+                    steps.push(`• Durata = ${durata} anni → Totale riga = ${calculatorData.formatNumber(totale,2)} €`);
+                    steps.push('----------------------------------------');
+                });
+
+                steps.push('');
+                steps.push('Riepilogo totale:');
+                steps.push(`Totale incentivo calcolato per tutti i generatori (pre-tetto): € ${calculatorData.formatNumber(total,2)}`);
+
+                // Apply cap similar to other interventi: min(incentivo_calcolato, p × costo_totale)
+                contextData = contextData || {};
+                const costInput = Number(params?.costo_totale) || 0;
+                let detP = 0;
+                try {
+                    const sel = Array.isArray(contextData?.selectedInterventions) ? contextData.selectedInterventions : [];
+                    const det = calculatorData.determinePercentuale(sel, params || {}, operatorType || '', contextData || {}, 'biomassa');
+                    detP = (det && typeof det.p === 'number') ? det.p : 0;
+                } catch (e) {
+                    detP = 0;
+                }
+                const cap = detP * costInput;
+                let finalResult = total;
+                if (cap > 0) {
+                    const capped = Math.min(total, cap);
+                    if (capped !== total) {
+                        steps.push(`Applicato tetto: min(incentivo_calcolato, p × costo_totale) = min(€${calculatorData.formatNumber(total,2)}, ${ calculatorData.formatNumber(detP*100,2) }% × €${calculatorData.formatNumber(costInput,2)} ) = €${calculatorData.formatNumber(capped,2)}`);
+                    } else {
+                        steps.push(`Nessun tetto applicato: tetto p×costo = €${calculatorData.formatNumber(cap,2)} >= incentivo calcolato`);
+                    }
+                    finalResult = Math.min(total, cap);
+                } else {
+                    steps.push('Nessun costo totale fornito o percentuale incentivabile assente: nessun tetto applicato.');
+                }
+
+                steps.push(`Totale incentivo erogabile finale: € ${calculatorData.formatNumber(finalResult,2)}`);
+
+                return { result: finalResult, steps, variables: { rowsCount: rows.length, totale_calcolato: calculatorData.formatCurrency(total,2), costo_totale_input: calculatorData.formatCurrency(costInput,2), percentuale_p: detP, tetto: calculatorData.formatCurrency(cap,2) } };
             }
         },
         'solare-termico': {
@@ -3350,8 +3498,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
             value: 20, // +20% sull'incentivo calcolato
             applicableToInterventions: ['biomassa'],
             isApplicable: (selectedInterventions, inputs) => {
-                return selectedInterventions.includes('biomassa') && 
-                       inputs.biomassa?.emissioni === '5';
+                if (!selectedInterventions || !selectedInterventions.includes('biomassa')) return false;
+                // Legacy single-field input
+                const b = inputs && inputs.biomassa ? inputs.biomassa : {};
+                if (b.emissioni === '5') return true;
+                // New table-driven input: check any row with emissioni_classe === '5'
+                const rows = Array.isArray(b.righe_biomassa) ? b.righe_biomassa : [];
+                return rows.some(r => String(r?.emissioni_classe || '').trim() === '5');
             }
         }
     },
@@ -3627,7 +3780,8 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 let Imas = (typeof intervention.getImas === 'function') ? intervention.getImas(params, opType, localCtx) : Number.POSITIVE_INFINITY;
 
                 const soggetto = this.getMassimaleSoggetto(interventionId, params, opType, localCtx);
-                const MassimaleSoggetto = soggetto.massimale || 0;
+                // If massimale is not provided or zero, treat as no cap (infinite)
+                const MassimaleSoggetto = (soggetto && typeof soggetto.massimale === 'number' && soggetto.massimale > 0) ? soggetto.massimale : Number.POSITIVE_INFINITY;
 
                 const finale = Math.min(Itot, Imas, MassimaleSoggetto);
                 return { Itot, Imas, MassimaleSoggetto, finale, soggettoDetails: soggetto };
@@ -3998,7 +4152,7 @@ calculatorData.computeFinalForIntervention = function(interventionId, params, op
 
     let Imas = (typeof intervention.getImas === 'function') ? intervention.getImas(params, opType, localCtx) : Number.POSITIVE_INFINITY;
     const soggetto = calculatorData.getMassimaleSoggetto(interventionId, params, opType, localCtx);
-    const MassimaleSoggetto = soggetto.massimale || 0;
+    const MassimaleSoggetto = (soggetto && typeof soggetto.massimale === 'number' && soggetto.massimale > 0) ? soggetto.massimale : Number.POSITIVE_INFINITY;
     const finale = Math.min(Itot, Imas, MassimaleSoggetto);
     return { Itot, Imas, MassimaleSoggetto, finale, soggettoDetails: soggetto };
 };

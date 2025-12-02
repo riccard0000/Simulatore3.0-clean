@@ -462,6 +462,62 @@ async function initCalculator() {
             }
             
             td.appendChild(cellInput);
+
+            // UI validation: block `potenza_nominale` > 35 kW for biomass stove/pellet types
+            try {
+                if (interventionId === 'biomassa' && col.id === 'potenza_nominale') {
+                    const helperErr = document.createElement('small');
+                    helperErr.className = 'field-error';
+                    helperErr.style.color = '#d32f2f';
+                    helperErr.style.display = 'none';
+                    helperErr.style.marginLeft = '8px';
+                    td.appendChild(helperErr);
+
+                    function validatePotenza() {
+                        try {
+                            const trRow = td.parentNode;
+                            const tipoEl = trRow ? trRow.querySelector('[data-column-id="tipo_generatore"]') : null;
+                            const tipoVal = tipoEl ? String(tipoEl.value || '').toLowerCase() : '';
+                            const isStove = tipoVal.includes('pellet') || tipoVal.includes('legna') || tipoVal.includes('termocam') || tipoVal.includes('stufe');
+                            const raw = String(cellInput.value || '').replace(',', '.').trim();
+                            if (!raw) {
+                                helperErr.style.display = 'none';
+                                return;
+                            }
+                            const num = parseFloat(raw);
+                            if (isStove && !isNaN(num) && num > 35) {
+                                // reset value and notify user
+                                cellInput.value = '';
+                                const r = parseInt(cellInput.dataset.rowIndex || '0');
+                                try { state.inputValues[interventionId][inputId][r][col.id] = ''; } catch (e) {}
+                                helperErr.textContent = 'Valore non ammesso: per questa tipologia la potenza deve essere ≤ 35 kW';
+                                helperErr.style.display = '';
+                                cellInput.classList.add('invalid');
+                            } else {
+                                helperErr.style.display = 'none';
+                                cellInput.classList.remove('invalid');
+                            }
+                        } catch (e) { /* ignore */ }
+                    }
+
+                    // run validation on change / input
+                    cellInput.addEventListener('change', validatePotenza);
+                    cellInput.addEventListener('input', validatePotenza);
+
+                    // revalidate when tipo_generatore changes
+                    (function attachTipoWatcher() {
+                        const trRow = td.parentNode;
+                        if (!trRow) return setTimeout(attachTipoWatcher, 20);
+                        const tipoEl = trRow.querySelector('[data-column-id="tipo_generatore"]');
+                        if (!tipoEl) return;
+                        tipoEl.addEventListener('change', () => {
+                            // clear helper when tipo changes
+                            helperErr.style.display = 'none';
+                            validatePotenza();
+                        });
+                    })();
+                }
+            } catch (e) { /* ignore UI validation setup errors */ }
                 // style hook for disabled inputs (keeps column visible but visibly disabled)
                 cellInput.classList.add('table-cell-input');
                 // If this column is the seasonal SCOP, add inline error placeholder and attach validation
@@ -1446,6 +1502,8 @@ async function initCalculator() {
     
     // Funzione per validare i campi obbligatori
     function validateRequiredFields() {
+        // Disable calculate button by default; will be enabled only if allValid
+        try { if (typeof calculateButton !== 'undefined' && calculateButton) calculateButton.disabled = true; } catch (e) {}
         let allValid = true;
         const missingFields = [];
         
@@ -1678,13 +1736,14 @@ async function initCalculator() {
         });
         
         if (!allValid) {
+            try { if (typeof calculateButton !== 'undefined' && calculateButton) { calculateButton.disabled = true; calculateButton.title = 'Correggi i campi evidenziati in rosso per abilitare il calcolo'; } } catch (e) {}
             return { 
                 valid: false, 
                 message: 'Completa tutti i campi obbligatori evidenziati in rosso',
                 fields: missingFields 
             };
         }
-        
+        try { if (typeof calculateButton !== 'undefined' && calculateButton) { calculateButton.disabled = false; calculateButton.title = ''; } } catch (e) {}
         return { valid: true };
     }
 

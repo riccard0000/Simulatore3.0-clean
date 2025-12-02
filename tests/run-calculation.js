@@ -1,7 +1,7 @@
 const fs = require('fs');
 
-// Load src/data.js by wrapping it in a function so we can retrieve calculatorData
-const code = fs.readFileSync('src/data.js', 'utf8') + '\nreturn calculatorData;';
+// Load project root data.js by wrapping it in a function so we can retrieve calculatorData
+const code = fs.readFileSync('data.js', 'utf8') + '\nreturn calculatorData;';
 const calculatorData = new Function(code)();
 
 // Input provided by user
