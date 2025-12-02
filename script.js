@@ -1166,6 +1166,19 @@ async function initCalculator() {
             
             // Reset dati specifici del soggetto precedente
             state.subjectSpecificData = {};
+
+            // Reset global zona climatica when subject changes
+            try {
+                const gz = document.getElementById('global-zona-climatica');
+                if (gz) gz.value = '';
+                if (state.subjectSpecificData) delete state.subjectSpecificData.zona_climatica;
+            } catch (e) { /* ignore */ }
+
+            // Clear previous calculation results
+            try {
+                if (typeof incentiveResultEl !== 'undefined' && incentiveResultEl) incentiveResultEl.textContent = '';
+                if (typeof resultDetailsEl !== 'undefined' && resultDetailsEl) resultDetailsEl.innerHTML = '';
+            } catch (e) { /* ignore */ }
             
             // Mostra step 2
             buildingCategoryGroup.style.display = 'block';
@@ -1202,6 +1215,16 @@ async function initCalculator() {
             // Rerender subject-specific fields because operator type may have changed
             renderSubjectSpecificFields();
             // populatePremiums(); // Rimosso: sezione premialità nascosta
+            // When building selection changes, also reset zona climatica and clear results
+            try {
+                const gz = document.getElementById('global-zona-climatica');
+                if (gz) gz.value = '';
+                if (state.subjectSpecificData) delete state.subjectSpecificData.zona_climatica;
+            } catch (e) { /* ignore */ }
+            try {
+                if (typeof incentiveResultEl !== 'undefined' && incentiveResultEl) incentiveResultEl.textContent = '';
+                if (typeof resultDetailsEl !== 'undefined' && resultDetailsEl) resultDetailsEl.innerHTML = '';
+            } catch (e) { /* ignore */ }
         });
 
         // Step 3 removed from UI: no listener
@@ -3244,7 +3267,13 @@ async function initCalculator() {
                     // dipendenti dal contesto (comune, subjectType, implementationMode).
                     // Usiamo i params normalizzati e con campi derivati calcolati
                     const safeParams = normalizedInputsByIntervention[intId] || normalizeParams(params);
-                    const exp = intervention.explain(safeParams, state.selectedOperator, contextData) || {};
+                    // Ensure explain receives subject/context and, when available, the per-intervention `costo_totale`.
+                    // Some interventions (e.g. teleriscaldamento) expect `costo_totale` either in params or context.
+                    const ctxForExplain = Object.assign({}, contextData);
+                    if (safeParams && typeof safeParams.costo_totale !== 'undefined') {
+                        ctxForExplain.costo_totale = safeParams.costo_totale;
+                    }
+                    const exp = intervention.explain(safeParams, state.selectedOperator, ctxForExplain) || {};
                     const vars = exp.variables || {};
                     const steps = exp.steps || [];
                     const formula = exp.formula ? `<div class="formula">🧮 Formula: <span>${exp.formula}</span></div>` : '';
