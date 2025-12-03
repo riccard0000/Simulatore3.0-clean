@@ -106,9 +106,9 @@ async function initCalculator() {
                         const rawCop = String(copEl.value || '').replace(',', '.').trim();
                         const copVal = rawCop === '' ? NaN : Number(rawCop);
                         const formattedCopMin = (typeof calculatorData !== 'undefined' && typeof calculatorData.formatNumber === 'function') ? calculatorData.formatNumber(copMin,2) : String(copMin);
-                        const copMsg = `Valore minimo normativo COP: ${formattedCopMin} (inserire valore > ${formattedCopMin})`;
-                        // strict comparison: COP must be strictly greater than minimum
-                        if (isNaN(copVal) || copVal <= Number(copMin)) {
+                        const copMsg = `Valore minimo normativo COP: ${formattedCopMin} (valore ammesso >= ${formattedCopMin})`;
+                        // comparison: COP must be greater or equal to minimum
+                        if (isNaN(copVal) || copVal < Number(copMin)) {
                             if (copEl.classList) copEl.classList.add('invalid');
                             copEl.style.borderColor = '#d32f2f'; copEl.style.backgroundColor = '#ffebee';
                             try { copEl.setCustomValidity(copMsg); } catch (e) {}
@@ -2075,9 +2075,9 @@ async function initCalculator() {
                     if (copMin !== null && copMin !== undefined && !isNaN(Number(copMin))) {
                         const raw = String(copEl.value || '').replace(',', '.').trim();
                         const val = raw === '' ? NaN : Number(raw);
-                        if (isNaN(val) || val <= Number(copMin)) {
+                        if (isNaN(val) || val < Number(copMin)) {
                             const formatted = (typeof calculatorData !== 'undefined' && typeof calculatorData.formatNumber === 'function') ? calculatorData.formatNumber(copMin,2) : String(copMin);
-                            const msg = `COP deve essere > ${formatted} (minimo ecodesign)`;
+                            const msg = `COP minimo richiesto: ${formatted}`;
                             errors.push({ row: idx + 1, msg });
                             try { copEl.classList.add('invalid'); copEl.style.borderColor = '#d32f2f'; copEl.style.backgroundColor = '#ffebee'; copEl.setCustomValidity(msg); } catch (e) {}
                             const copErr = copEl.parentNode.querySelector('.field-error'); if (copErr) { copErr.textContent = msg; copErr.style.display = 'block'; }
