@@ -3424,11 +3424,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const C = costo_totale / P;
                 const C_eff = Math.min(C, Cmax);
 
-                // Itot computed using normative base percentage (not company percent)
+                // Itot computed using normative base percentage
                 const Itot = basePct * C_eff * P;
 
-                // Imax computed using same basePct and Cmax
-                const Imax_calc = basePct * P * Cmax;
+                // Fixed normative Imax (absolute cap)
+                const Imax_fixed = 100000;
 
                 // Per imprese, applicare anche il massimale specifico per imprese: percentuale_imprese * Spesa
                 let companyCap = Infinity;
@@ -3443,16 +3443,16 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     if (opKey.includes('medium') || confirmedMedium) pctImp = 0.55;
                     else if (opKey.includes('large') || confirmedLarge) pctImp = 0.45;
                     else if (opKey.includes('small') || confirmedSmall) pctImp = 0.65;
-                    companyCap = pctImp * costo_totale;
+                    companyCap = Math.min(pctImp * costo_totale, P * C_eff);
                 } else {
                     const subj = (contextData && contextData.subjectType) ? String(contextData.subjectType).toLowerCase() : '';
-                    if (subj === 'small_company' || subj === 'micro' || subj === 'sme_small') companyCap = 0.65 * costo_totale;
-                    else if (subj === 'medium_company' || subj === 'sme_medium') companyCap = 0.55 * costo_totale;
-                    else if (subj === 'large_company' || subj === 'sme_large') companyCap = 0.45 * costo_totale;
+                    if (subj === 'small_company' || subj === 'micro' || subj === 'sme_small') companyCap = Math.min(0.65 * costo_totale, P * C_eff);
+                    else if (subj === 'medium_company' || subj === 'sme_medium') companyCap = Math.min(0.55 * costo_totale, P * C_eff);
+                    else if (subj === 'large_company' || subj === 'sme_large') companyCap = Math.min(0.45 * costo_totale, P * C_eff);
                 }
 
-                // Final result: min(Itot, Imax_calc, companyCap)
-                const finale = Math.min(Itot, Imax_calc, companyCap);
+                // Final result: min(Itot, fixed Imax, companyCap)
+                const finale = Math.min(Itot, Imax_fixed, companyCap);
                 return finale;
             },
             explain: (params, operatorType, contextData) => {
@@ -3470,7 +3470,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const C = costo_totale / P;
                 const C_eff = Math.min(C, Cmax);
                 const Itot = basePct * C_eff * P;
-                const Imax_calc = basePct * P * Cmax;
+                const Imax_calc = 100000; // fixed normative cap
 
                 // compute company cap if applicable
                 const ss = contextData && contextData.subjectSpecificData ? contextData.subjectSpecificData : {};
@@ -3485,13 +3485,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     if (opKey.includes('medium') || confirmedMedium) pctImp = 0.55;
                     else if (opKey.includes('large') || confirmedLarge) pctImp = 0.45;
                     else if (opKey.includes('small') || confirmedSmall) pctImp = 0.65;
-                    companyCap = pctImp * costo_totale;
+                    companyCap = Math.min(pctImp * costo_totale, P * C_eff);
                     pctImp_used = pctImp;
                 } else {
                     const subj = (contextData && contextData.subjectType) ? String(contextData.subjectType).toLowerCase() : '';
-                    if (subj === 'small_company' || subj === 'micro' || subj === 'sme_small') { companyCap = 0.65 * costo_totale; pctImp_used = 0.65; }
-                    else if (subj === 'medium_company' || subj === 'sme_medium') { companyCap = 0.55 * costo_totale; pctImp_used = 0.55; }
-                    else if (subj === 'large_company' || subj === 'sme_large') { companyCap = 0.45 * costo_totale; pctImp_used = 0.45; }
+                    if (subj === 'small_company' || subj === 'micro' || subj === 'sme_small') { companyCap = Math.min(0.65 * costo_totale, P * C_eff); pctImp_used = 0.65; }
+                    else if (subj === 'medium_company' || subj === 'sme_medium') { companyCap = Math.min(0.55 * costo_totale, P * C_eff); pctImp_used = 0.55; }
+                    else if (subj === 'large_company' || subj === 'sme_large') { companyCap = Math.min(0.45 * costo_totale, P * C_eff); pctImp_used = 0.45; }
                 }
 
                 const finale = Math.min(Itot, Imax_calc, companyCap);
