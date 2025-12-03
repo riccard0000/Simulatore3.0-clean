@@ -2753,92 +2753,158 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 restrictionNote: 'NON AMMESSI per imprese e ETS economici (art. 25, comma 2): sistemi ibridi con caldaia a gas sono combustibili fossili.',
             inputs: [
                 { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0, help: 'Necessario per calcolo premialità 100%' },
-                { id: 'tipo_sistema', name: 'Tipo sistema', type: 'select', options: ['Ibrido factory made (Pn ≤35kW)', 'Ibrido factory made (Pn >35kW)', 'Sistema bivalente (Pn ≤35kW)', 'Sistema bivalente (Pn >35kW)'] },
-                { id: 'potenza_pdc', name: 'Potenza termica pompa di calore Prated (kW)', type: 'number', min: 0, step: 0.1 },
-                { id: 'scop', name: 'SCOP pompa di calore', type: 'number', step: 0.01 },
-                { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'] }
+                { id: 'zona_climatica', name: 'Zona climatica', type: 'select', options: ['A', 'B', 'C', 'D', 'E', 'F'], help: 'La zona climatica è inserita una sola volta per l\'intervento; verrà ereditata da tutte le righe.' },
+                {
+                    id: 'righe_ibridi',
+                    name: 'Tabella sistemi ibridi (generatore per riga)',
+                    type: 'table',
+                    columns: [
+                        { id: 'tipo_sistema', name: 'Tipo sistema', type: 'select', options: ['Ibrido factory made', 'Sistema bivalente'], optional: false },
+                        { id: 'potenza_pdc', name: 'Potenza termica pompa di calore Prated (kW)', type: 'number', min: 0, step: 0.1 },
+                        { id: 'scop', name: 'SCOP pompa di calore', type: 'number', step: 0.01 },
+                        { id: 'note', name: 'Note (opzionale)', type: 'text', optional: true }
+                    ],
+                    help: 'Aggiungi una riga per ogni generatore presente nel sistema ibrido. Le righe verranno valutate separatamente e sommate.'
+                }
             ],
             calculate: (params, operatorType, contextData) => {
-                const { tipo_sistema, potenza_pdc, scop, zona_climatica } = params;
-                if (!potenza_pdc || !scop || !zona_climatica) return 0;
-                // For sistemi ibridi we assume a typical pump type aria/acqua for ecodesign minima
-                // Obtain the normative minima from the canonical regulatory table.
-                let scop_minimo = null;
-                try {
-                    if (typeof getPumpEcodesignSpec === 'function') {
-                        const spec = getPumpEcodesignSpec('aria/acqua', null, 'Elettrica');
-                        if (spec && typeof spec.scop !== 'undefined') scop_minimo = spec.scop;
+                const rows = Array.isArray(params?.righe_ibridi) ? params.righe_ibridi : [];
+                if (rows.length === 0) return 0;
+
+                // Use intervention-dedicated defaults/tables (can be replaced later with provided tables)
+                const scop_minimo = 2.825; // dedicated fallback for sistemi ibridi
+                const qufTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
+                const zona = params?.zona_climatica;
+                const quf = qufTable[zona];
+                if (!quf) return 0;
+
+                let totale_annuo = 0;
+                for (const row of rows) {
+                    const tipo_sistema = String(row?.tipo_sistema || '');
+                    const potenza_pdc = Number(row?.potenza_pdc) || 0;
+                    const scop = Number(row?.scop) || 0;
+                    if (!potenza_pdc || !scop) continue; // skip incomplete rows
+
+                    const qu = potenza_pdc * quf;
+                    const kp = (scop_minimo > 0) ? (scop / scop_minimo) : 1;
+                    const ei = qu * (1 - 1/scop) * kp;
+
+                    let k = 1.0;
+                    if (tipo_sistema.toLowerCase().includes('factory')) {
+                        k = 1.25; // factory made (both power bands)
+                    } else {
+                        // sistema bivalente: k = 1 for Pn <=35, 1.1 for Pn >35
+                        k = (potenza_pdc > 35) ? 1.1 : 1.0;
                     }
-                } catch (e) { /* ignore */ }
-                if (scop_minimo === null) {
-                    try {
-                        if (typeof lookupRegulatorySpec === 'function') {
-                            const reg = lookupRegulatorySpec('aria/acqua', null, 'Elettrica');
-                            if (reg) scop_minimo = (typeof reg.scop_min !== 'undefined') ? reg.scop_min : (typeof reg.sper_min !== 'undefined' ? reg.sper_min : null);
-                        }
-                    } catch (e) { /* ignore */ }
+
+                    // Dedicated Ci fallback for sistemi ibridi (can be replaced with dedicated table later)
+                    const ci = (potenza_pdc <= 35) ? 0.150 : 0.060;
+
+                    const incentivo_annuo = k * ei * ci;
+                    // Duration per generator: same rule as pump-gas (Pr > 35 → 5 anni, altrimenti 2)
+                    const durata = (potenza_pdc > 35) ? 5 : 2;
+                    totale_annuo += incentivo_annuo * durata;
                 }
-                // If we can't determine a normative minimum from the table, consider the
-                // system not eligible (no fallback to legacy constants allowed).
-                if (!scop_minimo) return 0;
-                
-                // Formula: Ia_tot = k × Ei × Ci
-                // dove Ei = Qu × [1 - 1/SCOP] × kp
-                
-                // Tabella 8: Quf
-                const qufTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
-                const quf = qufTable[zona_climatica];
-                
-                // Qu = Prated × Quf
-                const qu = potenza_pdc * quf;
-                
-                // kp = SCOP/SCOP_minimo (scop_minimo assumed from ecodesign table)
-                const kp = scop / scop_minimo;
-                
-                // EI
-                const ei = qu * (1 - 1/scop) * kp;
-                
-                // Tabella 18: Coefficiente k
-                let k;
-                if (tipo_sistema.includes('factory made')) {
-                    k = 1.25; // Ibrido factory made
-                } else {
-                    k = tipo_sistema.includes('>35kW') ? 1.1 : 1.0; // Bivalente
-                }
-                
-                // Prefer canonical Ci for an assumed 'aria/acqua' pump type; fall back to legacy values
-                let ci = null;
+
+                // Apply cost cap (p × costo_totale) similarly to 2.A
+                const costInput = Number(params?.costo_totale) || 0;
+                let detP = 0;
                 try {
-                    ci = getPumpCi('aria/acqua', null, 'Elettrica', potenza_pdc);
+                    const sel = Array.isArray(contextData?.selectedInterventions) ? contextData.selectedInterventions : [];
+                    const det = calculatorData.determinePercentuale(sel, params || {}, operatorType || '', contextData || {}, 'sistemi-ibridi');
+                    detP = (det && typeof det.p === 'number') ? det.p : 0;
                 } catch (e) {
-                    ci = null;
+                    detP = 0;
                 }
-                if (ci === null || typeof ci === 'undefined') {
-                    ci = (potenza_pdc <= 35) ? 0.150 : 0.060;
-                }
-                
-                // Incentivo annuo
-                const incentivo_annuo = k * ei * ci;
-                
-                // Incentivo totale
-                const durata = operatorType === 'pa' ? 5 : 2;
-                return incentivo_annuo * durata;
+                const cap = detP * costInput;
+                const cappedTotal = (cap > 0) ? Math.min(totale_annuo, cap) : totale_annuo;
+                return cappedTotal;
             },
-            explain: (params, operatorType) => {
-                const { tipo_sistema, potenza_pdc, scop, zona_climatica } = params;
+            explain: (params, operatorType, contextData) => {
+                const rows = Array.isArray(params?.righe_ibridi) ? params.righe_ibridi : [];
                 const qufTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
-                const Quf = qufTable[zona_climatica]||0; const Pr=potenza_pdc||0; const Qu=Pr*Quf;
-                // assume aria/acqua normative minimum for sistemi ibridi
-                const scop_minimo = 2.825;
-                const kp=(scop||0)/(scop_minimo||1);
-                const EI = Qu * (1 - 1/(scop||1)) * kp;
-                let k; if (tipo_sistema?.includes('factory made')) k=1.25; else k = tipo_sistema?.includes('>35kW')?1.1:1.0;
-                // prefer canonical table lookup for aria/acqua; fallback to legacy if absent
-                let Ci = null;
-                try { Ci = getPumpCi('aria/acqua', null, 'Elettrica', Pr); } catch(e) { Ci = null; }
-                if (Ci === null || typeof Ci === 'undefined') Ci = (Pr <= 35) ? 0.150 : 0.060;
-                const Ia_annuo = k * EI * Ci; const durata= operatorType==='pa'?5:2; const tot=Ia_annuo*durata;
-                return { result: tot, formula:`Ia_tot = k × EI × Ci × durata; EI = Qu × (1 - 1/SCOP) × kp; Qu = Prated × Quf`, variables:{k,Ei:EI,Qu,Prated:Pr,Quf,Ci,SCOP:scop||0,scop_minimo,kp,durata} };
+                const zona = params?.zona_climatica; const quf = qufTable[zona]||0;
+                const scop_minimo = 2.825; // intervention-local default
+                const steps = [];
+                let total = 0; const details = [];
+
+                if (!zona) {
+                    steps.push('Zona climatica non fornita: impossibile calcolare gli incentivi.');
+                    return { result: 0, steps, formula: '', variables: { rowsCount: 0 } };
+                }
+
+                rows.forEach((row, idx) => {
+                    const tipo_sistema = String(row?.tipo_sistema || '');
+                    const Pr = Number(row?.potenza_pdc) || 0;
+                    const scop = Number(row?.scop) || 0;
+                    if (!Pr || !scop) {
+                        steps.push(`Riga ${idx+1}: parametri incompleti (Pr o SCOP mancanti), ignorata.`);
+                        return;
+                    }
+
+                    const Qu = Pr * quf;
+                    const kp = (scop_minimo > 0) ? (scop / scop_minimo) : 1;
+                    const oneMinusInv = 1 - 1/(scop || 1);
+                    const EI = Qu * oneMinusInv * kp;
+
+                    let k = 1.0;
+                    if (tipo_sistema.toLowerCase().includes('factory')) k = 1.25;
+                    else k = (Pr > 35) ? 1.1 : 1.0;
+
+                    const Ci = (Pr <= 35) ? 0.150 : 0.060;
+                    const Ia_annuo = k * EI * Ci;
+                    const durata_row = (Pr > 35) ? 5 : 2;
+                    const totale_row = Ia_annuo * durata_row;
+                    total += totale_row;
+
+                    steps.push(`Riga ${idx+1} (${tipo_sistema} - Pr=${Pr} kW, zona ${zona}):`);
+                    steps.push(`• Qu = Pr × Quf(${zona}) = ${calculatorData.formatNumber(Pr,2)} × ${calculatorData.formatNumber(quf,0)} = ${calculatorData.formatNumber(Qu,2)} kWh/anno`);
+                    steps.push(`• SCOP inserito = ${calculatorData.formatNumber(scop,3)}; SCOP_min (dedicato) = ${calculatorData.formatNumber(scop_minimo,3)}`);
+                    steps.push(`• kp = SCOP / SCOP_min = ${calculatorData.formatNumber(kp,3)}`);
+                    steps.push(`• Fattore = (1 - 1/SCOP) = ${calculatorData.formatNumber(oneMinusInv,6)}`);
+                    steps.push(`• EI = Qu × Fattore × kp = ${calculatorData.formatNumber(EI,2)}`);
+                    steps.push(`• k (tipologia) = ${calculatorData.formatNumber(k,3)}; Ci (dedicato) = ${calculatorData.formatNumber(Ci,3)}`);
+                    steps.push(`• Ia_annuo = k × EI × Ci = ${calculatorData.formatNumber(Ia_annuo,2)}; durata = ${durata_row} anni → incentivo riga = € ${calculatorData.formatNumber(totale_row,2)}`);
+                    steps.push('----------------------------------------');
+
+                    details.push({ tipo_sistema, potenza_pdc: Pr, scop, Qu, EI, k, Ci, Ia_annuo, durata: durata_row, totale_row });
+                });
+
+                steps.push('');
+                steps.push('Riepilogo totale (prima del tetto):');
+                steps.push(`Totale incentivo calcolato per tutte le righe: € ${calculatorData.formatNumber(total,2)}`);
+
+                // Apply cost cap p × costo_totale
+                const costInput = Number(params?.costo_totale) || 0;
+                let detP = 0;
+                try {
+                    const sel = Array.isArray(contextData?.selectedInterventions) ? contextData.selectedInterventions : [];
+                    const det = calculatorData.determinePercentuale(sel, params || {}, operatorType || '', contextData || {}, 'sistemi-ibridi');
+                    detP = (det && typeof det.p === 'number') ? det.p : 0;
+                } catch (e) { detP = 0; }
+
+                const cap = detP * costInput;
+                let finalResult = total;
+                if (cap > 0) {
+                    const capped = Math.min(total, cap);
+                    if (capped !== total) {
+                        steps.push(`Applicato tetto: min(incentivo_calcolato, p × costo_totale) = min(€${calculatorData.formatNumber(total,2)}, ${ calculatorData.formatNumber(detP*100,2) }% × €${calculatorData.formatNumber(costInput,2)} ) = €${calculatorData.formatNumber(capped,2)}`);
+                    } else {
+                        steps.push(`Nessun tetto applicato: tetto p×costo = €${calculatorData.formatNumber(cap,2)} >= incentivo calcolato`);
+                    }
+                    finalResult = capped;
+                } else {
+                    steps.push('Nessun costo totale fornito o percentuale incentivabile assente: nessun tetto applicato.');
+                }
+
+                steps.push(`Totale incentivo erogabile finale: € ${calculatorData.formatNumber(finalResult,2)}`);
+
+                return {
+                    result: finalResult,
+                    steps,
+                    formula: 'min(Imas_calcolato, p × costo_totale)',
+                    variables: { rowsCount: rows.length, totale_calcolato: calculatorData.formatCurrency(total,2), costo_totale_input: calculatorData.formatCurrency(costInput,2), percentuale_p: detP, tetto: calculatorData.formatCurrency(cap,2), details }
+                };
             }
         },
         'biomassa': {
