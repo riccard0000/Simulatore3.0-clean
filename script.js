@@ -3198,6 +3198,61 @@ async function initCalculator() {
             }
         }
 
+        // Strict validation for sistemi-ibridi: require per-row ecodesign inputs and Pn
+        if (state.selectedInterventions.includes('sistemi-ibridi')) {
+            const scErrors = [];
+            const intId = 'sistemi-ibridi';
+            const inputId = 'righe_ibridi';
+            const tbody = document.getElementById(`tbody-${intId}-${inputId}`);
+            const rows = Array.isArray(state.inputValues[intId]?.[inputId]) ? state.inputValues[intId][inputId] : [];
+            const trEls = tbody ? Array.from(tbody.querySelectorAll('tr')) : [];
+
+            rows.forEach((row, idx) => {
+                const tr = trEls[idx] || null;
+                // Determine DOM elements if present
+                const alimentazioneEl = tr ? tr.querySelector('[data-column-id="alimentazione"]') : null;
+                const tipoEl = tr ? tr.querySelector('[data-column-id="tipo_pompa"]') : null;
+                const potPdcEl = tr ? tr.querySelector('[data-column-id="potenza_pdc"]') : null;
+                const scopEl = tr ? tr.querySelector('[data-column-id="scop"]') : null;
+                const pnEl = tr ? tr.querySelector('[data-column-id="potenza_caldaia"]') : null;
+
+                const alimentazioneVal = alimentazioneEl ? (alimentazioneEl.value || '') : (row?.alimentazione || '');
+                const tipoVal = tipoEl ? (tipoEl.value || '') : (row?.tipo_pompa || '');
+                const rawPotPdc = potPdcEl ? (String(potPdcEl.value || '').replace(',', '.')) : (row?.potenza_pdc);
+                const potPdcVal = rawPotPdc === '' ? NaN : Number(rawPotPdc);
+                const rawScop = scopEl ? (String(scopEl.value || '').replace(',', '.')) : (row?.scop);
+                const scopVal = rawScop === '' || rawScop === null ? null : Number(rawScop);
+                const rawPn = pnEl ? (String(pnEl.value || '').replace(',', '.')) : (row?.potenza_caldaia);
+                const pnVal = rawPn === '' ? NaN : Number(rawPn);
+
+                // Mandatory checks
+                if (!tipoVal) scErrors.push(`Riga ${idx+1}: tipo pompa non fornito`);
+                if (!alimentazioneVal) scErrors.push(`Riga ${idx+1}: alimentazione non fornita`);
+                if (isNaN(potPdcVal) || potPdcVal <= 0) scErrors.push(`Riga ${idx+1}: potenza pompa (Prated) non valida`);
+                if (scopVal === null || isNaN(scopVal)) scErrors.push(`Riga ${idx+1}: SCOP/SPER/COP non fornito`);
+                if (isNaN(pnVal) || pnVal <= 0) scErrors.push(`Riga ${idx+1}: potenza caldaia (Pn) non fornita o non valida`);
+
+                // If SCOP provided, compare against ecodesign minima when possible
+                if (!isNaN(scopVal) && scopVal !== null) {
+                    try {
+                        const gwpVal = row?.gwp || (tr ? (tr.querySelector('[data-column-id="gwp"]')?.value || null) : null);
+                        const spec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipoVal, gwpVal, alimentazioneVal) : null;
+                        const minScop = spec && (spec.scop || spec.sper || spec.cop) ? (spec.scop || spec.sper || spec.cop) : null;
+                        if (minScop !== null && typeof minScop !== 'undefined') {
+                            if (scopVal < Number(minScop)) {
+                                scErrors.push(`Riga ${idx+1}: SCOP fornito (${scopVal}) inferiore al minimo normativo (${minScop})`);
+                            }
+                        }
+                    } catch (e) { /* ignore helper errors */ }
+                }
+            });
+
+            if (scErrors.length > 0) {
+                alert('Errore nei campi di sistemi ibridi:\n' + scErrors.join('\n'));
+                return;
+            }
+        }
+
         // Prepara input per calcolo combinato ufficiale (include premi per-intervento selezionati)
             const inputsByIntervention = {};
             const normalizedInputsByIntervention = {};
@@ -3497,6 +3552,17 @@ function prepareParamsForCalculation(input) {
                 const sup = Number(r.superficie) || 0;
                 if (sup > 0) r.costo_specifico = (Number(r.costo_totale) / sup);
             }
+            return r;
+        });
+    }
+
+    // Normalizza la tabella righe_ibridi se presente: converti i campi numerici in Number
+    if (Array.isArray(normalized.righe_ibridi)) {
+        normalized.righe_ibridi = normalized.righe_ibridi.map(row => {
+            const r = normalizeParams(row);
+            if (r.potenza_pdc !== undefined && r.potenza_pdc !== null) r.potenza_pdc = Number(String(r.potenza_pdc).replace(',', '.')) || 0;
+            if (r.scop !== undefined && r.scop !== null) r.scop = Number(String(r.scop).replace(',', '.')) || 0;
+            if (r.potenza_caldaia !== undefined && r.potenza_caldaia !== null) r.potenza_caldaia = Number(String(r.potenza_caldaia).replace(',', '.')) || 0;
             return r;
         });
     }
