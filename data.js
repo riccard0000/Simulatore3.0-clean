@@ -2770,6 +2770,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         { id: 'gwp', name: 'Fascia GWP refrigerante', type: 'select', options: ['>150','<=150'], optional: true },
                         { id: 'potenza_pdc', name: 'Potenza termica pompa di calore Prated (kW)', type: 'number', min: 0, step: 0.1 },
                         { id: 'scop', name: 'SCOP pompa di calore / SPER / COP', type: 'number', step: 0.01 },
+                        { id: 'eff_stagionale', name: 'Efficienza stagionale (ηs) % - valore percentuale', type: 'number', min: 0, step: 0.01, help: 'Inserisci l\'efficienza stagionale in percentuale come per le pompe di calore (es. 137 → 137%)' },
                         { id: 'potenza_caldaia', name: 'Potenza nominale caldaia Pn (kW) — OBBLIGATORIO', type: 'number', min: 0, step: 0.1 },
                         { id: 'note', name: 'Note (opzionale)', type: 'text', optional: true }
                     ],
@@ -2800,30 +2801,45 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     const gwp = row?.gwp || null;
                     const potenza_pdc = Number(row?.potenza_pdc) || 0; // Prated
                     const user_scop_or_cop = (row?.scop !== undefined && row?.scop !== null) ? Number(row.scop) : null;
+                    const eff_stagionale = (row?.eff_stagionale !== undefined && row?.eff_stagionale !== null) ? Number(row.eff_stagionale) : null; // percent/value as in 2.A
                     const potenza_caldaia = Number(row?.potenza_caldaia) || 0; // Pn
 
-                    if (!potenza_pdc || !user_scop_or_cop) continue;
+                    // require Prated and either COP (for fixed double) or eff_stagionale (for seasonal efficiency)
+                    const tipoLower = String(tipo_pompa || '').toLowerCase();
+                    const isFixedDouble = tipoLower.includes('fixed') && tipoLower.includes('double');
+                    if (!potenza_pdc || !potenza_caldaia) continue;
+                    if (isFixedDouble) {
+                        if (user_scop_or_cop === null) continue; // COP required for fixed double
+                    } else {
+                        if (eff_stagionale === null) continue; // seasonal efficiency required for non-fixed types
+                    }
 
                     // Determine ecodesign minima using canonical helpers
                     const spec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {} : {};
                     const effSpec = (typeof getPumpEfficiencyMin === 'function') ? getPumpEfficiencyMin(tipo_pompa, gwp, alimentazione, (typeof potenza_pdc === 'number') ? potenza_pdc : (Number(potenza_pdc) || undefined)) || {} : {};
 
                     // Decide metric: COP when spec.cop is defined (fixed double duct), otherwise SCOP/SPER
-                    const tipoLower = String(tipo_pompa || '').toLowerCase();
-                    const isFixedDouble = tipoLower.includes('fixed') && tipoLower.includes('double');
-                    let metric = isFixedDouble && spec.cop ? 'cop' : 'scop';
+                    const tipoLowerLocal = String(tipo_pompa || '').toLowerCase();
+                    const isFixedDoubleLocal = tipoLowerLocal.includes('fixed') && tipoLowerLocal.includes('double');
+                    let metric = isFixedDoubleLocal && spec.cop ? 'cop' : 'scop';
                     let userValue = Number(user_scop_or_cop || 0);
                     let minValue = (metric === 'cop') ? (spec.cop || null) : (spec.scop || null);
                     if (minValue === null || typeof minValue === 'undefined') minValue = 1; // fallback
 
                     const qu = potenza_pdc * quf;
 
-                    // Compute kp similar to 2.A: prefer seasonal efficiency if available, otherwise ratio of userValue/minValue
+                    // Compute kp similar to 2.A: for fixed double use COP ratio; otherwise prefer seasonal efficiency ratio (ηs/ηs_min)
                     let kp = 1;
                     try {
                         const seasonalMin = (effSpec && typeof effSpec.eta_s_min !== 'undefined') ? Number(effSpec.eta_s_min) : null;
-                        // Note: hybrid rows currently don't collect eff_stagionale; skip that branch
-                        kp = (minValue && minValue > 0) ? (Number(userValue) / Number(minValue)) : 1;
+                        if (isFixedDoubleLocal && metric === 'cop') {
+                            const copMin = (spec && typeof spec.cop !== 'undefined') ? Number(spec.cop) : (minValue || 1);
+                            kp = (copMin > 0) ? (Number(userValue) / copMin) : 1;
+                        } else if (seasonalMin !== null && eff_stagionale !== null) {
+                            kp = (seasonalMin > 0) ? (Number(eff_stagionale) / Number(seasonalMin)) : 1;
+                        } else {
+                            kp = (minValue && minValue > 0) ? (Number(userValue) / Number(minValue)) : 1;
+                        }
                     } catch (e) {
                         kp = (minValue && minValue > 0 && userValue) ? (Number(userValue) / Number(minValue)) : 1;
                     }
@@ -2906,9 +2922,9 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                         if (isFixedDouble && spec.cop) {
                             const copMin = Number(spec.cop || minValue);
                             kp = (copMin > 0) ? (Number(userValue) / copMin) : 1;
-                        } else if (seasonalMin !== null) {
-                            // hybrids currently don't include eff_stagionale field, so skip seasonal ratio
-                            kp = (minValue && minValue > 0) ? (Number(userValue) / Number(minValue)) : 1;
+                        } else if (seasonalMin !== null && (row?.eff_stagionale !== undefined && row?.eff_stagionale !== null)) {
+                            const effUser = Number(row.eff_stagionale);
+                            kp = (seasonalMin > 0) ? (effUser / seasonalMin) : 1;
                         } else {
                             kp = (minValue && minValue > 0) ? (Number(userValue) / Number(minValue)) : 1;
                         }
