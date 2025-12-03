@@ -3406,28 +3406,111 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 { id: 'costo_totale', name: 'Costo totale intervento (€)', type: 'number', min: 0 }
             ],
             calculate: (params, operatorType, contextData) => {
-                const { potenza_elettrica, costo_totale } = params;
-                if (!potenza_elettrica || !costo_totale) return 0;
+                const P = Number(params?.potenza_elettrica) || 0;
+                const costo_totale = Number(params?.costo_totale) || 0;
+                if (P <= 0 || costo_totale <= 0) return 0;
 
-                // Formula: Itot = percentuale × C × Pnint
-                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'microcogenerazione');
-                const percentuale = det.p;
-                const cmax = 5000; // €/kWe
-                const imax = 100000; // €
+                // normative constants
+                const Cmax = 5000; // €/kWe
+                // normative max incentive overall
+                const Imax = 100000;
 
-                const costoAmmissibile = potenza_elettrica * cmax;
-                const costoEffettivo = Math.min(costo_totale, costoAmmissibile);
+                // Determine if Art.48-ter or small municipality apply (these force 100% base)
+                const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
+                const isPiccoloComune = contextData?.is_comune === true && contextData?.is_edificio_comunale === true && contextData?.is_piccolo_comune === true && contextData?.subjectType === 'pa';
+                const basePct = (isArt48ter || isPiccoloComune) ? 1.0 : 0.65;
 
-                const incentivo = percentuale * costoEffettivo;
+                // Compute admissible cost per kWe and effective specific cost
+                const C = costo_totale / P;
+                const C_eff = Math.min(C, Cmax);
 
-                return Math.min(incentivo, imax);
+                // Itot computed using normative base percentage (not company percent)
+                const Itot = basePct * C_eff * P;
+
+                // Imax computed using same basePct and Cmax
+                const Imax_calc = basePct * P * Cmax;
+
+                // Per imprese, applicare anche il massimale specifico per imprese: percentuale_imprese * Spesa
+                let companyCap = Infinity;
+                const opKey = String(operatorType || '').toLowerCase();
+                const ss = contextData && contextData.subjectSpecificData ? contextData.subjectSpecificData : {};
+                const confirmedSmall = !!ss.conferma_piccola_impresa;
+                const confirmedMedium = !!ss.conferma_media_impresa;
+                const confirmedLarge = !!ss.conferma_grande_impresa;
+
+                if (opKey.indexOf('private_tertiary') === 0 || confirmedSmall || confirmedMedium || confirmedLarge) {
+                    let pctImp = 0.65;
+                    if (opKey.includes('medium') || confirmedMedium) pctImp = 0.55;
+                    else if (opKey.includes('large') || confirmedLarge) pctImp = 0.45;
+                    else if (opKey.includes('small') || confirmedSmall) pctImp = 0.65;
+                    companyCap = pctImp * costo_totale;
+                } else {
+                    const subj = (contextData && contextData.subjectType) ? String(contextData.subjectType).toLowerCase() : '';
+                    if (subj === 'small_company' || subj === 'micro' || subj === 'sme_small') companyCap = 0.65 * costo_totale;
+                    else if (subj === 'medium_company' || subj === 'sme_medium') companyCap = 0.55 * costo_totale;
+                    else if (subj === 'large_company' || subj === 'sme_large') companyCap = 0.45 * costo_totale;
+                }
+
+                // Final result: min(Itot, Imax_calc, companyCap)
+                const finale = Math.min(Itot, Imax_calc, companyCap);
+                return finale;
             },
             explain: (params, operatorType, contextData) => {
-                const { potenza_elettrica, costo_totale } = params; const P = potenza_elettrica || 0; const cmax = 5000; const imax = 100000;
-                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params, operatorType, contextData || {}, 'microcogenerazione');
-                const percentuale = det.p;
-                const costoAmm = P * cmax; const costoEff = Math.min(costo_totale || 0, costoAmm); const base = percentuale * costoEff; const finale = Math.min(base, imax);
-                return { result: finale, formula:`Itot = ${Math.round(percentuale*100)}% × min(Spesa, P_el × 5000€/kWe); Imas=${calculatorData.formatNumber(imax)}€`, variables:{Spesa:costo_totale||0,P_el:P,Imas:imax, Percentuale: percentuale}, steps:[`C_amm=P_el×5000=${P}×5000=${calculatorData.formatNumber(costoAmm,2)}`,`Spesa_eff=min(${calculatorData.formatNumber((costo_totale||0),2)}, ${calculatorData.formatNumber(costoAmm,2)})=${calculatorData.formatNumber(costoEff,2)}`,`Base=${calculatorData.formatNumber(percentuale,2)}×${calculatorData.formatNumber(costoEff,2)}=${calculatorData.formatNumber(base,2)}`,`Finale=min(${calculatorData.formatNumber(base,2)}, ${calculatorData.formatNumber(imax)})=${calculatorData.formatNumber(finale,2)}`] };
+                const P = Number(params?.potenza_elettrica) || 0;
+                const costo_totale = Number(params?.costo_totale) || 0;
+                const Cmax = 5000;
+                const Imax = 100000;
+
+                if (P <= 0 || costo_totale <= 0) return { result: 0, steps: ['Parametri insufficienti: potenza o spesa non validi'] };
+
+                const isArt48ter = contextData?.buildingSubcategory && ['tertiary_school', 'tertiary_hospital'].includes(contextData.buildingSubcategory);
+                const isPiccoloComune = contextData?.is_comune === true && contextData?.is_edificio_comunale === true && contextData?.is_piccolo_comune === true && contextData?.subjectType === 'pa';
+                const basePct = (isArt48ter || isPiccoloComune) ? 1.0 : 0.65;
+
+                const C = costo_totale / P;
+                const C_eff = Math.min(C, Cmax);
+                const Itot = basePct * C_eff * P;
+                const Imax_calc = basePct * P * Cmax;
+
+                // compute company cap if applicable
+                const ss = contextData && contextData.subjectSpecificData ? contextData.subjectSpecificData : {};
+                const confirmedSmall = !!ss.conferma_piccola_impresa;
+                const confirmedMedium = !!ss.conferma_media_impresa;
+                const confirmedLarge = !!ss.conferma_grande_impresa;
+                const opKey = String(operatorType || '').toLowerCase();
+                let companyCap = Infinity;
+                let pctImp_used = null;
+                if (opKey.indexOf('private_tertiary') === 0 || confirmedSmall || confirmedMedium || confirmedLarge) {
+                    let pctImp = 0.65;
+                    if (opKey.includes('medium') || confirmedMedium) pctImp = 0.55;
+                    else if (opKey.includes('large') || confirmedLarge) pctImp = 0.45;
+                    else if (opKey.includes('small') || confirmedSmall) pctImp = 0.65;
+                    companyCap = pctImp * costo_totale;
+                    pctImp_used = pctImp;
+                } else {
+                    const subj = (contextData && contextData.subjectType) ? String(contextData.subjectType).toLowerCase() : '';
+                    if (subj === 'small_company' || subj === 'micro' || subj === 'sme_small') { companyCap = 0.65 * costo_totale; pctImp_used = 0.65; }
+                    else if (subj === 'medium_company' || subj === 'sme_medium') { companyCap = 0.55 * costo_totale; pctImp_used = 0.55; }
+                    else if (subj === 'large_company' || subj === 'sme_large') { companyCap = 0.45 * costo_totale; pctImp_used = 0.45; }
+                }
+
+                const finale = Math.min(Itot, Imax_calc, companyCap);
+
+                const steps = [];
+                steps.push(`C = Spesa / P_el = €${calculatorData.formatNumber(costo_totale,2)} / ${P} = €${calculatorData.formatNumber(C,2)}`);
+                steps.push(`C_eff = min(C, Cmax) = min(€${calculatorData.formatNumber(C,2)}, €${calculatorData.formatNumber(Cmax,2)}) = €${calculatorData.formatNumber(C_eff,2)}`);
+                steps.push(`Itot = % spesa × C_eff × P_el = ${calculatorData.formatNumber(basePct,2)} × €${calculatorData.formatNumber(C_eff,2)} × ${P} = €${calculatorData.formatNumber(Itot,2)}`);
+                if (companyCap !== Infinity) {
+                    const pctLabel = pctImp_used !== null ? `${calculatorData.formatNumber(pctImp_used*100,2)}%` : null;
+                    steps.push(`Imax = €${calculatorData.formatNumber(Imax_calc,2)}`);
+                    steps.push(`Massimale Imprese = pct imprese × Spesa = ${pctLabel} × €${calculatorData.formatNumber(costo_totale,2)} = €${calculatorData.formatNumber(companyCap,2)}`);
+                    steps.push(`Finale = min(Itot, Imax, Massimale Imprese) = €${calculatorData.formatNumber(finale,2)}`);
+                } else {
+                    steps.push(`Imax = €${calculatorData.formatNumber(Imax_calc,2)}`);
+                    steps.push(`Finale = min(Itot, Imax) = €${calculatorData.formatNumber(finale,2)}`);
+                }
+
+                return { result: finale, formula:`Itot = % spesa × min(C, Cmax) × P_el; Finale = min(Itot, Imax${companyCap !== Infinity ? ', Massimale imprese' : ''})`, variables: { Spesa: costo_totale, P_el: P, C, C_eff, Cmax, Imax: Imax_calc, Percentuale_incentivata_spesa: `${calculatorData.formatNumber(basePct*100,2)}%`, Percentuale_imprese: (pctImp_used===null?null:`${calculatorData.formatNumber(pctImp_used*100,2)}%`) }, steps };
             }
         },
         'diagnosi-energetica': {
