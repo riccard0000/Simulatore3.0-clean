@@ -2775,14 +2775,12 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const rows = Array.isArray(params?.righe_ibridi) ? params.righe_ibridi : [];
                 if (rows.length === 0) return 0;
 
-                // Use intervention-dedicated defaults/tables (can be replaced later with provided tables)
-                const scop_minimo = 2.825; // dedicated fallback for sistemi ibridi
                 const qufTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
                 const zona = params?.zona_climatica;
                 const quf = qufTable[zona];
                 if (!quf) return 0;
 
-                // Enforce mandatory Pn (potenza_caldaia) per user request: if any row misses Pn, abort calculation
+                // Enforce mandatory Pn (potenza_caldaia) per user request
                 for (const r of rows) {
                     if (!r || typeof r.potenza_caldaia === 'undefined' || r.potenza_caldaia === null || Number(r.potenza_caldaia) <= 0) {
                         return 0; // missing mandatory Pn
@@ -2792,33 +2790,59 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 let totale_annuo = 0;
                 for (const row of rows) {
                     const tipo_sistema = String(row?.tipo_sistema || '');
-                    const potenza_pdc = Number(row?.potenza_pdc) || 0;
-                    const scop = Number(row?.scop) || 0;
-                    const potenza_caldaia = Number(row?.potenza_caldaia) || 0;
-                    if (!potenza_pdc || !scop || !potenza_caldaia) continue; // skip incomplete rows (shouldn't happen due to Pn check)
+                    const alimentazione = String(row?.alimentazione || 'Elettrica');
+                    const tipo_pompa = String(row?.tipo_pompa || '');
+                    const gwp = row?.gwp || null;
+                    const potenza_pdc = Number(row?.potenza_pdc) || 0; // Prated
+                    const user_scop_or_cop = (row?.scop !== undefined && row?.scop !== null) ? Number(row.scop) : null;
+                    const potenza_caldaia = Number(row?.potenza_caldaia) || 0; // Pn
+
+                    if (!potenza_pdc || !user_scop_or_cop) continue;
+
+                    // Determine ecodesign minima using canonical helpers
+                    const spec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {} : {};
+                    const effSpec = (typeof getPumpEfficiencyMin === 'function') ? getPumpEfficiencyMin(tipo_pompa, gwp, alimentazione, (typeof potenza_pdc === 'number') ? potenza_pdc : (Number(potenza_pdc) || undefined)) || {} : {};
+
+                    // Decide metric: COP when spec.cop is defined (fixed double duct), otherwise SCOP/SPER
+                    const tipoLower = String(tipo_pompa || '').toLowerCase();
+                    const isFixedDouble = tipoLower.includes('fixed') && tipoLower.includes('double');
+                    let metric = isFixedDouble && spec.cop ? 'cop' : 'scop';
+                    let userValue = Number(user_scop_or_cop || 0);
+                    let minValue = (metric === 'cop') ? (spec.cop || null) : (spec.scop || null);
+                    if (minValue === null || typeof minValue === 'undefined') minValue = 1; // fallback
 
                     const qu = potenza_pdc * quf;
-                    const kp = (scop_minimo > 0) ? (scop / scop_minimo) : 1;
-                    const ei = qu * (1 - 1/scop) * kp;
 
+                    // Compute kp similar to 2.A: prefer seasonal efficiency if available, otherwise ratio of userValue/minValue
+                    let kp = 1;
+                    try {
+                        const seasonalMin = (effSpec && typeof effSpec.eta_s_min !== 'undefined') ? Number(effSpec.eta_s_min) : null;
+                        // Note: hybrid rows currently don't collect eff_stagionale; skip that branch
+                        kp = (minValue && minValue > 0) ? (Number(userValue) / Number(minValue)) : 1;
+                    } catch (e) {
+                        kp = (minValue && minValue > 0 && userValue) ? (Number(userValue) / Number(minValue)) : 1;
+                    }
+
+                    const oneMinusInv = 1 - 1/(userValue || minValue || 1);
+                    const EI = qu * oneMinusInv * kp;
+
+                    // Ci via canonical lookup
+                    const ci = (typeof getCanonicalPumpCi === 'function') ? getCanonicalPumpCi(tipo_pompa, gwp, alimentazione, potenza_pdc) : null;
+
+                    // k: factory made = 1.25, else bivalente depends on Pn (potenza_caldaia)
                     let k = 1.0;
-                    if (tipo_sistema.toLowerCase().includes('factory')) {
-                        k = 1.25; // factory made (independent from Pn)
+                    if (String(tipo_sistema || '').toLowerCase().includes('factory')) {
+                        k = 1.25;
                     } else {
-                        // sistema bivalente: k = 1 for Pn <=35, 1.1 for Pn >35 — APPLY THRESHOLD ON POTENZA_CALDAIA (Pn)
                         k = (potenza_caldaia > 35) ? 1.1 : 1.0;
                     }
 
-                    // Dedicated Ci fallback for sistemi ibridi (can be replaced with dedicated table later)
-                    const ci = (potenza_pdc <= 35) ? 0.150 : 0.060;
-
-                    const incentivo_annuo = k * ei * ci;
-                    // Duration per generator: same rule as pump-gas but applied on Pn (potenza_caldaia)
                     const durata = (potenza_caldaia > 35) ? 5 : 2;
+                    const incentivo_annuo = (ci !== null) ? (k * EI * ci) : 0;
                     totale_annuo += incentivo_annuo * durata;
                 }
 
-                // Apply cost cap (p × costo_totale) similarly to 2.A
+                // Apply cost cap (p × costo_totale)
                 const costInput = Number(params?.costo_totale) || 0;
                 let detP = 0;
                 try {
@@ -2836,7 +2860,6 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const rows = Array.isArray(params?.righe_ibridi) ? params.righe_ibridi : [];
                 const qufTable = { A: 600, B: 850, C: 1100, D: 1400, E: 1700, F: 1800 };
                 const zona = params?.zona_climatica; const quf = qufTable[zona]||0;
-                const scop_minimo = 2.825; // intervention-local default
                 const steps = [];
                 let total = 0; const details = [];
 
@@ -2847,39 +2870,90 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                 rows.forEach((row, idx) => {
                     const tipo_sistema = String(row?.tipo_sistema || '');
+                    const tipo_pompa = String(row?.tipo_pompa || '');
+                    const alimentazione = String(row?.alimentazione || 'Elettrica');
+                    const gwp = row?.gwp || null;
                     const Pr = Number(row?.potenza_pdc) || 0;
-                    const scop = Number(row?.scop) || 0;
-                    if (!Pr || !scop) {
-                        steps.push(`Riga ${idx+1}: parametri incompleti (Pr o SCOP mancanti), ignorata.`);
+                    const user_scop_or_cop = (row?.scop !== undefined && row?.scop !== null) ? Number(row.scop) : null;
+                    const potenza_caldaia = Number(row?.potenza_caldaia) || 0;
+
+                    if (!Pr || !user_scop_or_cop || !potenza_caldaia) {
+                        steps.push(`Riga ${idx+1}: parametri incompleti (Pr, SCOP/COP o Pn mancanti), ignorata.`);
                         return;
                     }
 
-                    const Qu = Pr * quf;
-                    const kp = (scop_minimo > 0) ? (scop / scop_minimo) : 1;
-                    const oneMinusInv = 1 - 1/(scop || 1);
+                    const spec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipo_pompa, gwp, alimentazione) || {} : {};
+                    const effSpec = (typeof getPumpEfficiencyMin === 'function') ? getPumpEfficiencyMin(tipo_pompa, gwp, alimentazione, (typeof Pr === 'number') ? Pr : (Number(Pr) || undefined)) || {} : {};
+
+                    const tipoLower = String(tipo_pompa || '').toLowerCase();
+                    const isFixedDouble = tipoLower.includes('fixed') && tipoLower.includes('double');
+                    const metric = isFixedDouble && spec.cop ? 'COP' : 'SCOP/SPER';
+                    const userValue = Number(user_scop_or_cop || 0);
+                    let minValue = (metric === 'COP') ? (spec.cop || null) : (spec.scop || null);
+                    if (minValue === null || typeof minValue === 'undefined') minValue = 1;
+
+                    const Quf = qufTable[zona] || 0; const Qu = Pr * Quf;
+
+                    const seasonalMin = (effSpec && typeof effSpec.eta_s_min !== 'undefined') ? Number(effSpec.eta_s_min) : null;
+
+                    let kp = 1;
+                    try {
+                        if (isFixedDouble && spec.cop) {
+                            const copMin = Number(spec.cop || minValue);
+                            kp = (copMin > 0) ? (Number(userValue) / copMin) : 1;
+                        } else if (seasonalMin !== null) {
+                            // hybrids currently don't include eff_stagionale field, so skip seasonal ratio
+                            kp = (minValue && minValue > 0) ? (Number(userValue) / Number(minValue)) : 1;
+                        } else {
+                            kp = (minValue && minValue > 0) ? (Number(userValue) / Number(minValue)) : 1;
+                        }
+                    } catch (e) {
+                        kp = (minValue && minValue > 0 && userValue) ? (Number(userValue) / Number(minValue)) : 1;
+                    }
+
+                    const oneMinusInv = 1 - 1/(userValue || minValue || 1);
                     const EI = Qu * oneMinusInv * kp;
 
-                    let k = 1.0;
-                    if (tipo_sistema.toLowerCase().includes('factory')) k = 1.25;
-                    else k = (Pr > 35) ? 1.1 : 1.0;
+                    const Ci = (typeof getCanonicalPumpCi === 'function') ? getCanonicalPumpCi(tipo_pompa, gwp, alimentazione, Pr) : null;
 
-                    const Ci = (Pr <= 35) ? 0.150 : 0.060;
-                    const Ia_annuo = k * EI * Ci;
-                    const durata_row = (Pr > 35) ? 5 : 2;
-                    const totale_row = Ia_annuo * durata_row;
+                    let k = 1.0;
+                    if (String(tipo_sistema || '').toLowerCase().includes('factory')) k = 1.25;
+                    else k = (potenza_caldaia > 35) ? 1.1 : 1.0;
+
+                    const durata = (potenza_caldaia > 35) ? 5 : 2;
+                    const Ia_annuo = Ci === null ? 0 : (k * EI * Ci);
+                    const totale_row = Ia_annuo * durata;
                     total += totale_row;
 
-                    steps.push(`Riga ${idx+1} (${tipo_sistema} - Pr=${Pr} kW, zona ${zona}):`);
-                    steps.push(`• Qu = Pr × Quf(${zona}) = ${calculatorData.formatNumber(Pr,2)} × ${calculatorData.formatNumber(quf,0)} = ${calculatorData.formatNumber(Qu,2)} kWh/anno`);
-                    steps.push(`• SCOP inserito = ${calculatorData.formatNumber(scop,3)}; SCOP_min (dedicato) = ${calculatorData.formatNumber(scop_minimo,3)}`);
-                    steps.push(`• kp = SCOP / SCOP_min = ${calculatorData.formatNumber(kp,3)}`);
-                    steps.push(`• Fattore = (1 - 1/SCOP) = ${calculatorData.formatNumber(oneMinusInv,6)}`);
-                    steps.push(`• EI = Qu × Fattore × kp = ${calculatorData.formatNumber(EI,2)}`);
-                    steps.push(`• k (tipologia) = ${calculatorData.formatNumber(k,3)}; Ci (dedicato) = ${calculatorData.formatNumber(Ci,3)}`);
-                    steps.push(`• Ia_annuo = k × EI × Ci = ${calculatorData.formatNumber(Ia_annuo,2)}; durata = ${durata_row} anni → incentivo riga = € ${calculatorData.formatNumber(totale_row,2)}`);
+                    // Explain steps
+                    const notCompliantMetric = userValue < minValue;
+                    const notCompliantSeasonal = (seasonalMin !== null && false); // no eff_stagionale provided in hybrid rows
+
+                    steps.push(`Riga ${idx+1} (${tipo_sistema} - Pr=${Pr} kW, Pn=${potenza_caldaia} kW, zona ${zona}):`);
+                    steps.push(`• ${metric} inserito = ${userValue}; minimo Ecodesign (${metric}) = ${minValue}` + (notCompliantMetric ? ' → ATTENZIONE: NON conforme al requisito Ecodesign' : ''));
+                    if (seasonalMin !== null) {
+                        steps.push(`• Minimo eff. stagionale (ηs_min) = ${calculatorData.formatNumber(seasonalMin,0)} (se fornito, verrà usato per kp)`);
+                    }
+                    try {
+                        if (isFixedDouble && spec.cop) {
+                            const copMin = Number(spec.cop || minValue);
+                            steps.push(`• kp = COP / COP_min = ${calculatorData.formatNumber(userValue,3)} / ${calculatorData.formatNumber(copMin,3)} = ${calculatorData.formatNumber(kp,3)}`);
+                        } else if (seasonalMin !== null) {
+                            steps.push(`• kp = ηs / ηs_min (non disponibile nei dati ibridi) fallback → ${calculatorData.formatNumber(kp,3)}`);
+                        } else {
+                            steps.push(`• kp (fallback) = ${metric} / ${metric}_min = ${calculatorData.formatNumber(userValue,3)} / ${calculatorData.formatNumber(minValue,3)} = ${calculatorData.formatNumber(kp,3)}`);
+                        }
+                    } catch (e) {
+                        steps.push(`• kp (calc) = ${calculatorData.formatNumber(kp,3)}`);
+                    }
+                    steps.push(`• Quf (ore/anno per zona ${zona}) = ${calculatorData.formatNumber(Quf,0)}`);
+                    steps.push(`• Qu = Pr × Quf = ${calculatorData.formatNumber(Pr,2)} × ${calculatorData.formatNumber(Quf,0)} = ${calculatorData.formatNumber(Qu,2)} kWh/anno`);
+                    steps.push(`• Fattore = (1 - 1/${metric.split('/')[0]}) = 1 - 1/${calculatorData.formatNumber((userValue||minValue),3)} = ${calculatorData.formatNumber(oneMinusInv,6)}`);
+                    steps.push(`• EI = Qu × Fattore × kp = ${calculatorData.formatNumber(Qu,2)} × ${calculatorData.formatNumber(oneMinusInv,6)} × ${calculatorData.formatNumber(kp,3)} = ${calculatorData.formatNumber(EI,2)}`);
+                    steps.push(`• k (tipologia) = ${calculatorData.formatNumber(k,3)}; Ci = ${Ci===null? 'N/D' : calculatorData.formatNumber(Ci,3)} → Ia_annuo = k × EI × Ci = ${calculatorData.formatNumber(Ia_annuo,2)}; durata = ${durata} anni → incentivo riga = € ${calculatorData.formatNumber(totale_row,2)}`);
                     steps.push('----------------------------------------');
 
-                    details.push({ tipo_sistema, potenza_pdc: Pr, scop, Qu, EI, k, Ci, Ia_annuo, durata: durata_row, totale_row });
+                    details.push({ tipo_sistema, potenza_pdc: Pr, potenza_caldaia, userValue, minValue, Qu, EI, k, Ci, Ia_annuo, durata: durata, totale_row });
                 });
 
                 steps.push('');
