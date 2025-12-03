@@ -336,24 +336,21 @@ async function initCalculator() {
                                 tipoSel.insertBefore(placeholder, tipoSel.firstChild);
                                 tipoSel.value = '';
 
-                                // Clear other inputs in the same row (keep alimentazione and tipo_pompa untouched)
+                                // Clear other inputs in the same row (keep alimentazione, tipo_pompa and tipo_sistema untouched)
                                 const r = parseInt(trRow.dataset.rowIndex || '0');
                                 try {
                                     const inputs = Array.from(trRow.querySelectorAll('input, select'));
                                     inputs.forEach(el => {
                                         const colId2 = el.dataset ? el.dataset.columnId : null;
                                         if (!colId2) return;
-                                        if (colId2 === 'alimentazione' || colId2 === 'tipo_pompa') return;
+                                        // Preserve these columns when alimentazione changes
+                                        if (colId2 === 'alimentazione' || colId2 === 'tipo_pompa' || colId2 === 'tipo_sistema') return;
                                         try { el.value = ''; } catch (e) {}
                                         if (state.inputValues && state.inputValues[interventionId] && state.inputValues[interventionId][inputId] && state.inputValues[interventionId][inputId][r]) {
                                             state.inputValues[interventionId][inputId][r][colId2] = '';
                                         }
                                     });
                                 } catch (e) { /* ignore clearing errors */ }
-
-                                if (state.inputValues && state.inputValues[interventionId] && state.inputValues[interventionId][inputId] && state.inputValues[interventionId][inputId][r]) {
-                                    delete state.inputValues[interventionId][inputId][r]['tipo_pompa'];
-                                }
 
                                 // Add listener for tipo_pompa selection
                                 tipoSel.addEventListener('change', (ev) => {
@@ -363,7 +360,8 @@ async function initCalculator() {
                                         els.forEach(el => {
                                             const cid = el.dataset ? el.dataset.columnId : null;
                                             if (!cid) return;
-                                            if (cid === 'alimentazione' || cid === 'tipo_pompa') return;
+                                            // Preserve alimentazione, tipo_pompa and tipo_sistema when tipo_pompa changes
+                                            if (cid === 'alimentazione' || cid === 'tipo_pompa' || cid === 'tipo_sistema') return;
                                             try { el.value = ''; } catch (e) {}
                                             if (state.inputValues && state.inputValues[interventionId] && state.inputValues[interventionId][inputId] && state.inputValues[interventionId][inputId][rr]) {
                                                 state.inputValues[interventionId][inputId][rr][cid] = '';
@@ -1758,6 +1756,27 @@ async function initCalculator() {
             });
         });
         
+        // specific validations: pump and hybrid power constraints
+        try {
+            const pompeCheck = validatePompePowerConstraints();
+            if (!pompeCheck.valid && Array.isArray(pompeCheck.errors)) {
+                pompeCheck.errors.forEach(e => {
+                    missingFields.push(`Pompe row ${e.row}: ${e.msg}`);
+                    allValid = false;
+                });
+            }
+        } catch (e) { /* ignore pump constraint check errors */ }
+
+        try {
+            const ibridiCheck = validateIbridiPowerConstraints();
+            if (!ibridiCheck.valid && Array.isArray(ibridiCheck.errors)) {
+                ibridiCheck.errors.forEach(e => {
+                    missingFields.push(`Sistemi ibridi row ${e.row}: ${e.msg}`);
+                    allValid = false;
+                });
+            }
+        } catch (e) { /* ignore hybrid constraint check errors */ }
+
         if (!allValid) {
             try { if (typeof calculateButton !== 'undefined' && calculateButton) { calculateButton.disabled = true; calculateButton.title = 'Correggi i campi evidenziati in rosso per abilitare il calcolo'; } } catch (e) {}
             return { 
@@ -1824,6 +1843,55 @@ async function initCalculator() {
         if (errors.length > 0) {
             return { valid: false, errors };
         }
+        return { valid: true };
+    }
+
+    // Validazione per sistemi ibridi: applica i vincoli di potenza analoghi alle pompe
+    function validateIbridiPowerConstraints() {
+        const inputId = 'righe_ibridi';
+        const tbody = document.getElementById(`tbody-sistemi-ibridi-${inputId}`);
+        if (!tbody) return { valid: true };
+
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        const smallTypes = ['aria/aria split/multisplit', 'aria/aria fixed double duct'];
+        const errors = [];
+
+        rows.forEach((tr, idx) => {
+            const tipoEl = tr.querySelector('[data-column-id="tipo_pompa"]');
+            const potEl = tr.querySelector('[data-column-id="potenza_pdc"]');
+            if (!tipoEl || !potEl) return;
+            const tipo = String(tipoEl.value || '').trim();
+            const raw = String(potEl.value || '').replace(',', '.').trim();
+            const pot = raw === '' ? NaN : parseFloat(raw);
+
+            // small types: max 12 kW
+            if (smallTypes.includes(tipo)) {
+                if (isNaN(pot) || pot > 12) {
+                    errors.push({ row: idx + 1, tipo, pot, msg: 'Potenza massima ammessa 12 kW per la tipologia selezionata' });
+                    if (potEl.classList) potEl.classList.add('invalid');
+                    try { potEl.setCustomValidity('Potenza massima ammessa 12 kW'); } catch (e) {}
+                } else {
+                    try { potEl.setCustomValidity(''); } catch (e) {}
+                    potEl.classList.remove('invalid');
+                }
+            }
+
+            // VRF/VRV: min 13 kW
+            const lowerTipo = tipo.toLowerCase();
+            const isVrf = lowerTipo.includes('vrf') || lowerTipo.includes('vrv');
+            if (isVrf) {
+                if (isNaN(pot) || pot < 13) {
+                    errors.push({ row: idx + 1, tipo, pot, msg: 'Potenza minima ammessa 13 kW per VRF/VRV' });
+                    if (potEl.classList) potEl.classList.add('invalid');
+                    try { potEl.setCustomValidity('Potenza minima ammessa 13 kW'); } catch (e) {}
+                } else {
+                    try { potEl.setCustomValidity(''); } catch (e) {}
+                    potEl.classList.remove('invalid');
+                }
+            }
+        });
+
+        if (errors.length > 0) return { valid: false, errors };
         return { valid: true };
     }
 
