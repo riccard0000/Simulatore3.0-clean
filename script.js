@@ -123,6 +123,7 @@ async function initCalculator() {
                 }
             } catch (e) { /* ignore COP validation errors */ }
         } catch (e) { console.warn('applyScopMinConstraintForRow error', e); }
+        try { validateRequiredFields(); } catch (e) {}
     }
 
     function applyEffStagMinConstraintForRow(trEl) {
@@ -177,6 +178,7 @@ async function initCalculator() {
                 if (effErr) { effErr.textContent = ''; effErr.style.display = 'none'; }
             }
         } catch (e) { console.warn('applyEffStagMinConstraintForRow error', e); }
+        try { validateRequiredFields(); } catch (e) {}
     }
 
     // --- INIZIALIZZAZIONE ---
@@ -1735,7 +1737,7 @@ async function initCalculator() {
                                     treatOptional = false;
                                 }
 
-                                if (treatOptional && (col.id === 'gwp' || col.id === 'cop')) {
+                                if (treatOptional && (col.id === 'gwp' || col.id === 'cop' || col.id === 'eff_stagionale')) {
                                     // If the cell exists and is visible and enabled, then it's required
                                     if (cellEl && cellEl.offsetParent !== null && !cellEl.disabled) {
                                         treatOptional = false;
@@ -1890,6 +1892,17 @@ async function initCalculator() {
             }
         } catch (e) { /* ignore pump constraint check errors */ }
 
+        // Validate pump minima (SCOP / COP / eff_stagionale) against normative values
+        try {
+            const pompeMinCheck = validatePompeMinimaConstraints();
+            if (!pompeMinCheck.valid && Array.isArray(pompeMinCheck.errors)) {
+                pompeMinCheck.errors.forEach(e => {
+                    missingFields.push(`Pompe row ${e.row}: ${e.msg}`);
+                    allValid = false;
+                });
+            }
+        } catch (e) { /* ignore pump minima check errors */ }
+
         try {
             const ibridiCheck = validateIbridiPowerConstraints();
             if (!ibridiCheck.valid && Array.isArray(ibridiCheck.errors)) {
@@ -2015,6 +2028,109 @@ async function initCalculator() {
         });
 
         if (errors.length > 0) return { valid: false, errors };
+        return { valid: true };
+    }
+
+    // Validate SCOP / COP / eff_stagionale minima for electric heat pumps (2.A)
+    function validatePompeMinimaConstraints() {
+        const inputId = 'righe_pompe';
+        const tbody = document.getElementById(`tbody-pompa-calore-elettrica-${inputId}`) || document.getElementById(`tbody-pompa-calore-gas-${inputId}`) || document.getElementById(`tbody-pompe-${inputId}`) || document.querySelector('[id^="tbody-pompa-calore-elettrica-"]');
+        // prefer the specific electric pump table
+        // fallback: try to find any tbody for pompe table
+        let actualTbody = null;
+        if (tbody && tbody.tagName === 'TBODY') actualTbody = tbody;
+        else {
+            // search for known ids
+            const byId = document.getElementById(`tbody-pompa-calore-elettrica-${inputId}`) || document.getElementById(`tbody-pompe-${inputId}`);
+            if (byId && byId.tagName === 'TBODY') actualTbody = byId;
+            else {
+                // try to find any matching tbody pattern
+                const els = Array.from(document.querySelectorAll('tbody')).filter(t => (t.id || '').includes('pompa') || (t.id || '').includes('pompe'));
+                if (els.length) actualTbody = els[0];
+            }
+        }
+        if (!actualTbody) return { valid: true };
+
+        const rows = Array.from(actualTbody.querySelectorAll('tr'));
+        const errors = [];
+
+        rows.forEach((tr, idx) => {
+            try {
+                const tipo = String(tr.querySelector('[data-column-id="tipo_pompa"]')?.value || '').trim();
+                const potEl = tr.querySelector('[data-column-id="potenza_nominale"]');
+                const potVal = potEl ? (Number(String(potEl.value || '').replace(',', '.')) || NaN) : NaN;
+                const gwp = tr.querySelector('[data-column-id="gwp"]')?.value || null;
+                const alimentazione = tr.querySelector('[data-column-id="alimentazione"]')?.value || 'Elettrica';
+
+                const scopEl = tr.querySelector('[data-column-id="scop"]');
+                const copEl = tr.querySelector('[data-column-id="cop"]');
+                const effEl = tr.querySelector('[data-column-id="eff_stagionale"]');
+
+                const effSpec = (typeof getPumpEfficiencyMin === 'function') ? getPumpEfficiencyMin(tipo, gwp, alimentazione, potVal) || {} : {};
+                const ecoSpec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipo, gwp, alimentazione) || {} : {};
+
+                // COP (strict >)
+                if (copEl && !copEl.disabled) {
+                    const copMin = (typeof effSpec.cop !== 'undefined') ? effSpec.cop : (typeof ecoSpec.cop !== 'undefined' ? ecoSpec.cop : null);
+                    if (copMin !== null && copMin !== undefined && !isNaN(Number(copMin))) {
+                        const raw = String(copEl.value || '').replace(',', '.').trim();
+                        const val = raw === '' ? NaN : Number(raw);
+                        if (isNaN(val) || val <= Number(copMin)) {
+                            const formatted = (typeof calculatorData !== 'undefined' && typeof calculatorData.formatNumber === 'function') ? calculatorData.formatNumber(copMin,2) : String(copMin);
+                            const msg = `COP deve essere > ${formatted} (minimo ecodesign)`;
+                            errors.push({ row: idx + 1, msg });
+                            try { copEl.classList.add('invalid'); copEl.style.borderColor = '#d32f2f'; copEl.style.backgroundColor = '#ffebee'; copEl.setCustomValidity(msg); } catch (e) {}
+                            const copErr = copEl.parentNode.querySelector('.field-error'); if (copErr) { copErr.textContent = msg; copErr.style.display = 'block'; }
+                        } else {
+                            try { copEl.classList.remove('invalid'); copEl.style.borderColor=''; copEl.style.backgroundColor=''; copEl.setCustomValidity(''); } catch (e) {}
+                            const copErr = copEl.parentNode.querySelector('.field-error'); if (copErr) { copErr.textContent = ''; copErr.style.display = 'none'; }
+                        }
+                    }
+                }
+
+                // SCOP (>= minima) — use scop minima from effSpec.scop or ecoSpec.scop
+                if (scopEl && !scopEl.disabled) {
+                    const scopMin = (typeof effSpec.scop !== 'undefined') ? effSpec.scop : (typeof ecoSpec.scop !== 'undefined' ? ecoSpec.scop : null);
+                    if (scopMin !== null && scopMin !== undefined && !isNaN(Number(scopMin))) {
+                        const raw = String(scopEl.value || '').replace(',', '.').trim();
+                        const val = raw === '' ? NaN : Number(raw);
+                        if (isNaN(val) || val < Number(scopMin)) {
+                            const formatted = (typeof calculatorData !== 'undefined' && typeof calculatorData.formatNumber === 'function') ? calculatorData.formatNumber(scopMin,2) : String(scopMin);
+                            const msg = `SCOP minimo richiesto: ${formatted}`;
+                            errors.push({ row: idx + 1, msg });
+                            try { scopEl.classList.add('invalid'); scopEl.style.borderColor = '#d32f2f'; scopEl.style.backgroundColor = '#ffebee'; scopEl.setCustomValidity(msg); } catch (e) {}
+                            const scopErr = scopEl.parentNode.querySelector('.field-error'); if (scopErr) { scopErr.textContent = msg; scopErr.style.display = 'block'; }
+                        } else {
+                            try { scopEl.classList.remove('invalid'); scopEl.style.borderColor=''; scopEl.style.backgroundColor=''; scopEl.setCustomValidity(''); } catch (e) {}
+                            const scopErr = scopEl.parentNode.querySelector('.field-error'); if (scopErr) { scopErr.textContent = ''; scopErr.style.display = 'none'; }
+                        }
+                    }
+                }
+
+                // Efficienza stagionale (eta_s) — prefer eta_s_min then scop
+                if (effEl && !effEl.disabled) {
+                    const etaMin = (typeof effSpec.eta_s_min !== 'undefined') ? effSpec.eta_s_min : ((typeof effSpec.scop !== 'undefined') ? effSpec.scop : (typeof ecoSpec.scop !== 'undefined' ? ecoSpec.scop : null));
+                    if (etaMin !== null && etaMin !== undefined && !isNaN(Number(etaMin))) {
+                        const raw = String(effEl.value || '').replace(',', '.').trim();
+                        const val = raw === '' ? NaN : Number(raw);
+                        if (isNaN(val) || val < Number(etaMin)) {
+                            const formatted = (typeof calculatorData !== 'undefined' && typeof calculatorData.formatNumber === 'function') ? calculatorData.formatNumber(etaMin,2) : String(etaMin);
+                            const msg = `Efficienza stagionale minima: ${formatted}`;
+                            errors.push({ row: idx + 1, msg });
+                            try { effEl.classList.add('invalid'); effEl.style.borderColor = '#d32f2f'; effEl.style.backgroundColor = '#ffebee'; effEl.setCustomValidity(msg); } catch (e) {}
+                            const effErr = effEl.parentNode.querySelector('.field-error'); if (effErr) { effErr.textContent = msg; effErr.style.display = 'block'; }
+                        } else {
+                            try { effEl.classList.remove('invalid'); effEl.style.borderColor=''; effEl.style.backgroundColor=''; effEl.setCustomValidity(''); } catch (e) {}
+                            const effErr = effEl.parentNode.querySelector('.field-error'); if (effErr) { effErr.textContent = ''; effErr.style.display = 'none'; }
+                        }
+                    }
+                }
+            } catch (e) {
+                // per-row ignore
+            }
+        });
+
+        if (errors.length) return { valid: false, errors };
         return { valid: true };
     }
 
