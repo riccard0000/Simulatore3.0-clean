@@ -32,28 +32,151 @@ async function initCalculator() {
     // Previously selected interventions (used to restore selection when conflicts occur)
     let prevSelectedInterventions = [];
 
-    // Compatibility shims: ensure row-scoped constraint helpers exist.
-    // These were referenced in many places; provide lightweight implementations
-    // to avoid runtime ReferenceErrors. They perform no heavy logic here —
-    // full validation is handled elsewhere in the app.
+    // Row-level constraint helpers: validate and show normative minima inline
+    // These functions read the pump type, GWP and alimentazione from the row,
+    // query the canonical helpers in `data.js` and update the small.field-error
+    // element located in the same cell. They also add the same visual styling
+    // used by `validateRequiredFields()` (red border/background + .invalid class).
     function applyScopMinConstraintForRow(trEl) {
         try {
-            // Best-effort: if a global implementation exists, call it
-            if (typeof window !== 'undefined' && typeof window.applyScopMinConstraintForRow === 'function') {
-                return window.applyScopMinConstraintForRow(trEl);
+            if (!trEl) return;
+            const tipo = trEl.querySelector('[data-column-id="tipo_pompa"]')?.value || '';
+            const gwp = trEl.querySelector('[data-column-id="gwp"]')?.value || '';
+            const alimentazione = trEl.querySelector('[data-column-id="alimentazione"]')?.value || '';
+
+            // Try to obtain a sensible power hint from available fields
+            let pot;
+            ['potenza_nominale','potenza_pdc','potenza_caldaia','Pr'].some(id => {
+                const el = trEl.querySelector(`[data-column-id="${id}"]`);
+                if (el && String(el.value || '').trim() !== '') { pot = Number(String(el.value||'').replace(',', '.')) || undefined; return true; }
+                return false;
+            });
+
+            const effSpec = (typeof getPumpEfficiencyMin === 'function') ? getPumpEfficiencyMin(tipo, gwp, alimentazione, pot) || {} : {};
+            const ecoSpec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipo, gwp, alimentazione) || {} : {};
+
+            // Determine the SCOP minimum: prefer explicit scop (or sper mapped), then ecodesign scop
+            let minVal = (typeof effSpec.scop !== 'undefined') ? effSpec.scop : (typeof ecoSpec.scop !== 'undefined' ? ecoSpec.scop : null);
+
+            const scopEl = trEl.querySelector('[data-column-id="scop"]');
+            const scopErr = scopEl ? (scopEl.parentNode.querySelector('.field-error') || null) : null;
+
+            // Also prepare COP elements: some rows (fixed double duct) use COP instead of SCOP
+            const copEl = trEl.querySelector('[data-column-id="cop"]');
+            const copErr = copEl ? (copEl.parentNode.querySelector('.field-error') || null) : null;
+
+            if (!scopEl || scopEl.disabled) {
+                if (scopErr) { scopErr.textContent = ''; scopErr.style.display = 'none'; }
+                if (scopEl) { scopEl.classList.remove('invalid'); scopEl.style.borderColor=''; scopEl.style.backgroundColor=''; try{scopEl.setCustomValidity('');}catch(e){} }
+                return;
             }
-            // Otherwise, no-op (keeps UI responsive while preserving prior behavior)
-            return;
-        } catch (e) { console.warn('applyScopMinConstraintForRow shim error', e); }
+
+            if (minVal === null || typeof minVal === 'undefined' || isNaN(Number(minVal))) {
+                // No normative minimum available: clear any previous messages
+                if (scopErr) { scopErr.textContent = ''; scopErr.style.display = 'none'; }
+                scopEl.classList.remove('invalid'); scopEl.style.borderColor=''; scopEl.style.backgroundColor=''; try{scopEl.setCustomValidity('');}catch(e){}
+                return;
+            }
+
+            const raw = String(scopEl.value || '').replace(',', '.').trim();
+            const valNum = raw === '' ? NaN : Number(raw);
+            const formattedMin = (typeof calculatorData !== 'undefined' && typeof calculatorData.formatNumber === 'function') ? calculatorData.formatNumber(minVal,2) : String(minVal);
+            const msg = `Valore minimo normativo: ${formattedMin}`;
+
+            if (isNaN(valNum) || valNum < Number(minVal)) {
+                // mark invalid and show message (also when empty to guide user)
+                if (scopEl.classList) scopEl.classList.add('invalid');
+                scopEl.style.borderColor = '#d32f2f'; scopEl.style.backgroundColor = '#ffebee';
+                try { scopEl.setCustomValidity(msg); } catch (e) {}
+                if (scopErr) { scopErr.textContent = msg; scopErr.style.display = 'block'; }
+            } else {
+                if (scopEl.classList) scopEl.classList.remove('invalid');
+                scopEl.style.borderColor = ''; scopEl.style.backgroundColor = '';
+                try { scopEl.setCustomValidity(''); } catch (e) {}
+                if (scopErr) { scopErr.textContent = ''; scopErr.style.display = 'none'; }
+            }
+            // COP validation: validate only when COP input is present and enabled
+            try {
+                const copMin = (typeof effSpec.cop !== 'undefined') ? effSpec.cop : (typeof ecoSpec.cop !== 'undefined' ? ecoSpec.cop : null);
+                if (copEl && !copEl.disabled) {
+                    if (copMin === null || typeof copMin === 'undefined' || isNaN(Number(copMin))) {
+                        if (copErr) { copErr.textContent = ''; copErr.style.display = 'none'; }
+                        copEl.classList.remove('invalid'); copEl.style.borderColor=''; copEl.style.backgroundColor=''; try{copEl.setCustomValidity('');}catch(e){}
+                    } else {
+                        const rawCop = String(copEl.value || '').replace(',', '.').trim();
+                        const copVal = rawCop === '' ? NaN : Number(rawCop);
+                        const formattedCopMin = (typeof calculatorData !== 'undefined' && typeof calculatorData.formatNumber === 'function') ? calculatorData.formatNumber(copMin,2) : String(copMin);
+                        const copMsg = `Valore minimo normativo COP: ${formattedCopMin} (inserire valore > ${formattedCopMin})`;
+                        // strict comparison: COP must be strictly greater than minimum
+                        if (isNaN(copVal) || copVal <= Number(copMin)) {
+                            if (copEl.classList) copEl.classList.add('invalid');
+                            copEl.style.borderColor = '#d32f2f'; copEl.style.backgroundColor = '#ffebee';
+                            try { copEl.setCustomValidity(copMsg); } catch (e) {}
+                            if (copErr) { copErr.textContent = copMsg; copErr.style.display = 'block'; }
+                        } else {
+                            if (copEl.classList) copEl.classList.remove('invalid');
+                            copEl.style.borderColor = ''; copEl.style.backgroundColor = '';
+                            try { copEl.setCustomValidity(''); } catch (e) {}
+                            if (copErr) { copErr.textContent = ''; copErr.style.display = 'none'; }
+                        }
+                    }
+                }
+            } catch (e) { /* ignore COP validation errors */ }
+        } catch (e) { console.warn('applyScopMinConstraintForRow error', e); }
     }
 
     function applyEffStagMinConstraintForRow(trEl) {
         try {
-            if (typeof window !== 'undefined' && typeof window.applyEffStagMinConstraintForRow === 'function') {
-                return window.applyEffStagMinConstraintForRow(trEl);
+            if (!trEl) return;
+            const tipo = trEl.querySelector('[data-column-id="tipo_pompa"]')?.value || '';
+            const gwp = trEl.querySelector('[data-column-id="gwp"]')?.value || '';
+            const alimentazione = trEl.querySelector('[data-column-id="alimentazione"]')?.value || '';
+
+            let pot;
+            ['potenza_nominale','potenza_pdc','potenza_caldaia','Pr'].some(id => {
+                const el = trEl.querySelector(`[data-column-id="${id}"]`);
+                if (el && String(el.value || '').trim() !== '') { pot = Number(String(el.value||'').replace(',', '.')) || undefined; return true; }
+                return false;
+            });
+
+            const effSpec = (typeof getPumpEfficiencyMin === 'function') ? getPumpEfficiencyMin(tipo, gwp, alimentazione, pot) || {} : {};
+            const ecoSpec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipo, gwp, alimentazione) || {} : {};
+
+            // Prefer explicit eta_s_min, otherwise fall back to scop (or ecodesign scop)
+            let minVal = (typeof effSpec.eta_s_min !== 'undefined') ? effSpec.eta_s_min : ((typeof effSpec.scop !== 'undefined') ? effSpec.scop : (typeof ecoSpec.scop !== 'undefined' ? ecoSpec.scop : null));
+
+            const effEl = trEl.querySelector('[data-column-id="eff_stagionale"]');
+            const effErr = effEl ? (effEl.parentNode.querySelector('.field-error') || null) : null;
+
+            if (!effEl || effEl.disabled) {
+                if (effErr) { effErr.textContent = ''; effErr.style.display = 'none'; }
+                if (effEl) { effEl.classList.remove('invalid'); effEl.style.borderColor=''; effEl.style.backgroundColor=''; try{effEl.setCustomValidity('');}catch(e){} }
+                return;
             }
-            return;
-        } catch (e) { console.warn('applyEffStagMinConstraintForRow shim error', e); }
+
+            if (minVal === null || typeof minVal === 'undefined' || isNaN(Number(minVal))) {
+                if (effErr) { effErr.textContent = ''; effErr.style.display = 'none'; }
+                effEl.classList.remove('invalid'); effEl.style.borderColor=''; effEl.style.backgroundColor=''; try{effEl.setCustomValidity('');}catch(e){}
+                return;
+            }
+
+            const raw = String(effEl.value || '').replace(',', '.').trim();
+            const valNum = raw === '' ? NaN : Number(raw);
+            const formattedMin = (typeof calculatorData !== 'undefined' && typeof calculatorData.formatNumber === 'function') ? calculatorData.formatNumber(minVal,2) : String(minVal);
+            const msg = `Valore minimo normativo: ${formattedMin}`;
+
+            if (isNaN(valNum) || valNum < Number(minVal)) {
+                if (effEl.classList) effEl.classList.add('invalid');
+                effEl.style.borderColor = '#d32f2f'; effEl.style.backgroundColor = '#ffebee';
+                try { effEl.setCustomValidity(msg); } catch (e) {}
+                if (effErr) { effErr.textContent = msg; effErr.style.display = 'block'; }
+            } else {
+                if (effEl.classList) effEl.classList.remove('invalid');
+                effEl.style.borderColor = ''; effEl.style.backgroundColor = '';
+                try { effEl.setCustomValidity(''); } catch (e) {}
+                if (effErr) { effErr.textContent = ''; effErr.style.display = 'none'; }
+            }
+        } catch (e) { console.warn('applyEffStagMinConstraintForRow error', e); }
     }
 
     // --- INIZIALIZZAZIONE ---

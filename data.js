@@ -2295,7 +2295,12 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     // Check compliance vs ecodesign minima (for SCOP/COP)
                     let notCompliant = false;
                     if (minValue !== undefined && minValue !== null) {
-                        if (userValue < minValue) notCompliant = true;
+                        // For COP metric the requirement is strictly greater than the minimum
+                        if (metric === 'cop') {
+                            if (!(userValue > minValue)) notCompliant = true;
+                        } else {
+                            if (userValue < minValue) notCompliant = true;
+                        }
                     }
 
                     // seasonal efficiency minima (eta_s_min) when applicable
@@ -2414,7 +2419,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     total += totale;
 
                     // compliance check
-                    const notCompliantMetric = userValue < minValue;
+                    const notCompliantMetric = (metric === 'COP') ? (userValue <= minValue) : (userValue < minValue);
                     const notCompliantSeasonal = (seasonalMin !== null && eff_stagionale !== null && eff_stagionale < seasonalMin);
                     const notCompliant = notCompliantMetric || notCompliantSeasonal;
 
@@ -2669,7 +2674,7 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     const totale = Ia_annuo * durata;
                     total += totale;
 
-                    const notCompliantMetric = userValue < minValue;
+                    const notCompliantMetric = (metric === 'COP') ? (userValue <= minValue) : (userValue < minValue);
                     const notCompliantSeasonal = (seasonalMin !== null && eff_stagionale !== null && eff_stagionale < seasonalMin);
                     const notCompliant = notCompliantMetric || notCompliantSeasonal;
 
