@@ -2760,8 +2760,12 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     type: 'table',
                     columns: [
                         { id: 'tipo_sistema', name: 'Tipo sistema', type: 'select', options: ['Ibrido factory made', 'Sistema bivalente'], optional: false },
+                        { id: 'alimentazione', name: 'Alimentazione pompa di calore', type: 'select', options: ['Elettrica','GAS'], optional: false, help: 'Seleziona il tipo di alimentazione della pompa' },
+                        { id: 'tipo_pompa', name: 'Tipo di pompa di calore', type: 'select', options: getPumpTypeOptions() },
+                        { id: 'gwp', name: 'Fascia GWP refrigerante', type: 'select', options: ['>150','<=150'], optional: true },
                         { id: 'potenza_pdc', name: 'Potenza termica pompa di calore Prated (kW)', type: 'number', min: 0, step: 0.1 },
-                        { id: 'scop', name: 'SCOP pompa di calore', type: 'number', step: 0.01 },
+                        { id: 'scop', name: 'SCOP pompa di calore / SPER / COP', type: 'number', step: 0.01 },
+                        { id: 'potenza_caldaia', name: 'Potenza nominale caldaia Pn (kW) — OBBLIGATORIO', type: 'number', min: 0, step: 0.1 },
                         { id: 'note', name: 'Note (opzionale)', type: 'text', optional: true }
                     ],
                     help: 'Aggiungi una riga per ogni generatore presente nel sistema ibrido. Le righe verranno valutate separatamente e sommate.'
@@ -2778,12 +2782,20 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const quf = qufTable[zona];
                 if (!quf) return 0;
 
+                // Enforce mandatory Pn (potenza_caldaia) per user request: if any row misses Pn, abort calculation
+                for (const r of rows) {
+                    if (!r || typeof r.potenza_caldaia === 'undefined' || r.potenza_caldaia === null || Number(r.potenza_caldaia) <= 0) {
+                        return 0; // missing mandatory Pn
+                    }
+                }
+
                 let totale_annuo = 0;
                 for (const row of rows) {
                     const tipo_sistema = String(row?.tipo_sistema || '');
                     const potenza_pdc = Number(row?.potenza_pdc) || 0;
                     const scop = Number(row?.scop) || 0;
-                    if (!potenza_pdc || !scop) continue; // skip incomplete rows
+                    const potenza_caldaia = Number(row?.potenza_caldaia) || 0;
+                    if (!potenza_pdc || !scop || !potenza_caldaia) continue; // skip incomplete rows (shouldn't happen due to Pn check)
 
                     const qu = potenza_pdc * quf;
                     const kp = (scop_minimo > 0) ? (scop / scop_minimo) : 1;
@@ -2791,18 +2803,18 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
 
                     let k = 1.0;
                     if (tipo_sistema.toLowerCase().includes('factory')) {
-                        k = 1.25; // factory made (both power bands)
+                        k = 1.25; // factory made (independent from Pn)
                     } else {
-                        // sistema bivalente: k = 1 for Pn <=35, 1.1 for Pn >35
-                        k = (potenza_pdc > 35) ? 1.1 : 1.0;
+                        // sistema bivalente: k = 1 for Pn <=35, 1.1 for Pn >35 — APPLY THRESHOLD ON POTENZA_CALDAIA (Pn)
+                        k = (potenza_caldaia > 35) ? 1.1 : 1.0;
                     }
 
                     // Dedicated Ci fallback for sistemi ibridi (can be replaced with dedicated table later)
                     const ci = (potenza_pdc <= 35) ? 0.150 : 0.060;
 
                     const incentivo_annuo = k * ei * ci;
-                    // Duration per generator: same rule as pump-gas (Pr > 35 → 5 anni, altrimenti 2)
-                    const durata = (potenza_pdc > 35) ? 5 : 2;
+                    // Duration per generator: same rule as pump-gas but applied on Pn (potenza_caldaia)
+                    const durata = (potenza_caldaia > 35) ? 5 : 2;
                     totale_annuo += incentivo_annuo * durata;
                 }
 
