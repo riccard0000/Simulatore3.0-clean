@@ -3159,8 +3159,13 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                 const rows = Array.isArray(params?.righe_sc) ? params.righe_sc : [];
                 if (costTotal <= 0 || rows.length === 0) return 0;
 
-                // Base incentivabile: 40% della spesa totale
-                const baseIncentive = 0.40 * costTotal;
+                // Base incentivabile: normalmente 40% della spesa totale,
+                // ma se la determinazione della percentuale (es. Art.48-ter / Comune <15k)
+                // impone il 100% dobbiamo sostituire il 40% con quel valore.
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params || {}, operatorType || '', contextData || {}, 'scaldacqua-pdc');
+                // Use 100% only when determinePercentuale explicitly returns 1.0 for this intervention.
+                const basePct = (det && typeof det.p === 'number' && det.p === 1.0) ? 1.0 : 0.40;
+                const baseIncentive = basePct * costTotal;
 
                 // Compute sum of per-unit massimali
                 let sumMassimali = 0;
@@ -3195,8 +3200,11 @@ const calculatorData = { // Updated: 2025-11-04 15:45:25
                     return { result: 0, steps, variables: { costo_totale: costTotal } };
                 }
 
-                const base = 0.40 * costTotal;
-                steps.push(`Base incentivabile = 40% × Spesa totale = 0.40 × €${calculatorData.formatNumber(costTotal,2)} = €${calculatorData.formatNumber(base,2)}`);
+                // Determine if a special 100% rule applies (Art.48-ter or Comune <15k)
+                const det = calculatorData.determinePercentuale(contextData?.selectedInterventions || [], params || {}, operatorType || '', contextData || {}, 'scaldacqua-pdc');
+                const basePct = (det && typeof det.p === 'number' && det.p === 1.0) ? 1.0 : 0.40;
+                const base = basePct * costTotal;
+                steps.push(`Base incentivabile = ${Math.round(basePct*100)}% × Spesa totale = ${basePct.toFixed(2)} × €${calculatorData.formatNumber(costTotal,2)} = €${calculatorData.formatNumber(base,2)}`);
 
                 let sumMassimali = 0;
                 rows.forEach((row, idx) => {

@@ -45,4 +45,13 @@ const sc = calculatorData.interventions['scaldacqua-pdc'];
     console.log('OK testMultipleRows_sumSmaller');
 })();
 
+// Test 5: Art.48-ter (scuola) should make base percentuale 100% -> final = min(Spesa totale, sumMassimali)
+(function testArt48terSchool100pct() {
+    const params = { costo_totale: 1000, righe_sc: [{ classe_prodotto: 'Classe A', capacita_band: '≤ 150 L', quantita: 1 }] };
+    const res = sc.calculate(params, 'pa', { selectedInterventions: ['scaldacqua-pdc'], buildingSubcategory: 'tertiary_school' });
+    // base would be 100% × 1000 = 1000, sumMassimali = 500 -> final = 500
+    assert(Math.abs(Number(res) - 500) < 1e-9, `Expected 500 for Art.48-ter school override, got ${res}`);
+    console.log('OK testArt48terSchool100pct');
+})();
+
 console.log('All scaldacqua-pdc unit tests passed.');
