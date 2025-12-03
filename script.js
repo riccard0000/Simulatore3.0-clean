@@ -1913,6 +1913,17 @@ async function initCalculator() {
             }
         } catch (e) { /* ignore hybrid constraint check errors */ }
 
+        // Validate minima for hybrid systems using same rules as 2.A pumps
+        try {
+            const ibridiMinCheck = validateIbridiMinimaConstraints();
+            if (!ibridiMinCheck.valid && Array.isArray(ibridiMinCheck.errors)) {
+                ibridiMinCheck.errors.forEach(e => {
+                    missingFields.push(`Sistemi ibridi row ${e.row}: ${e.msg}`);
+                    allValid = false;
+                });
+            }
+        } catch (e) { /* ignore hybrid minima check errors */ }
+
         if (!allValid) {
             try { if (typeof calculateButton !== 'undefined' && calculateButton) { calculateButton.disabled = true; calculateButton.title = 'Correggi i campi evidenziati in rosso per abilitare il calcolo'; } } catch (e) {}
             return { 
@@ -2127,6 +2138,95 @@ async function initCalculator() {
                 }
             } catch (e) {
                 // per-row ignore
+            }
+        });
+
+        if (errors.length) return { valid: false, errors };
+        return { valid: true };
+    }
+
+    // Validate minima for hybrid system rows (2.B) using same rules as pumps (2.A)
+    function validateIbridiMinimaConstraints() {
+        const inputId = 'righe_ibridi';
+        const tbody = document.getElementById(`tbody-sistemi-ibridi-${inputId}`);
+        if (!tbody) return { valid: true };
+
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        const errors = [];
+
+        rows.forEach((tr, idx) => {
+            try {
+                const tipo = String(tr.querySelector('[data-column-id="tipo_pompa"]')?.value || '').trim();
+                const potEl = tr.querySelector('[data-column-id="potenza_pdc"]');
+                const potVal = potEl ? (Number(String(potEl.value || '').replace(',', '.')) || NaN) : NaN;
+                const gwp = tr.querySelector('[data-column-id="gwp"]')?.value || null;
+                const alimentazione = tr.querySelector('[data-column-id="alimentazione"]')?.value || 'Elettrica';
+
+                const scopEl = tr.querySelector('[data-column-id="scop"]');
+                const copEl = tr.querySelector('[data-column-id="cop"]');
+                const effEl = tr.querySelector('[data-column-id="eff_stagionale"]');
+
+                const effSpec = (typeof getPumpEfficiencyMin === 'function') ? getPumpEfficiencyMin(tipo, gwp, alimentazione, potVal) || {} : {};
+                const ecoSpec = (typeof getPumpEcodesignSpec === 'function') ? getPumpEcodesignSpec(tipo, gwp, alimentazione) || {} : {};
+
+                // COP (>= minima accepted)
+                if (copEl && !copEl.disabled) {
+                    const copMin = (typeof effSpec.cop !== 'undefined') ? effSpec.cop : (typeof ecoSpec.cop !== 'undefined' ? ecoSpec.cop : null);
+                    if (copMin !== null && copMin !== undefined && !isNaN(Number(copMin))) {
+                        const raw = String(copEl.value || '').replace(',', '.').trim();
+                        const val = raw === '' ? NaN : Number(raw);
+                        if (isNaN(val) || val < Number(copMin)) {
+                            const formatted = (typeof calculatorData !== 'undefined' && typeof calculatorData.formatNumber === 'function') ? calculatorData.formatNumber(copMin,2) : String(copMin);
+                            const msg = `COP minimo richiesto: ${formatted}`;
+                            errors.push({ row: idx + 1, msg });
+                            try { copEl.classList.add('invalid'); copEl.style.borderColor = '#d32f2f'; copEl.style.backgroundColor = '#ffebee'; copEl.setCustomValidity(msg); } catch (e) {}
+                            const copErr = copEl.parentNode.querySelector('.field-error'); if (copErr) { copErr.textContent = msg; copErr.style.display = 'block'; }
+                        } else {
+                            try { copEl.classList.remove('invalid'); copEl.style.borderColor=''; copEl.style.backgroundColor=''; copEl.setCustomValidity(''); } catch (e) {}
+                            const copErr = copEl.parentNode.querySelector('.field-error'); if (copErr) { copErr.textContent = ''; copErr.style.display = 'none'; }
+                        }
+                    }
+                }
+
+                // SCOP (>= minima)
+                if (scopEl && !scopEl.disabled) {
+                    const scopMin = (typeof effSpec.scop !== 'undefined') ? effSpec.scop : (typeof ecoSpec.scop !== 'undefined' ? ecoSpec.scop : null);
+                    if (scopMin !== null && scopMin !== undefined && !isNaN(Number(scopMin))) {
+                        const raw = String(scopEl.value || '').replace(',', '.').trim();
+                        const val = raw === '' ? NaN : Number(raw);
+                        if (isNaN(val) || val < Number(scopMin)) {
+                            const formatted = (typeof calculatorData !== 'undefined' && typeof calculatorData.formatNumber === 'function') ? calculatorData.formatNumber(scopMin,2) : String(scopMin);
+                            const msg = `SCOP minimo richiesto: ${formatted}`;
+                            errors.push({ row: idx + 1, msg });
+                            try { scopEl.classList.add('invalid'); scopEl.style.borderColor = '#d32f2f'; scopEl.style.backgroundColor = '#ffebee'; scopEl.setCustomValidity(msg); } catch (e) {}
+                            const scopErr = scopEl.parentNode.querySelector('.field-error'); if (scopErr) { scopErr.textContent = msg; scopErr.style.display = 'block'; }
+                        } else {
+                            try { scopEl.classList.remove('invalid'); scopEl.style.borderColor=''; scopEl.style.backgroundColor=''; scopEl.setCustomValidity(''); } catch (e) {}
+                            const scopErr = scopEl.parentNode.querySelector('.field-error'); if (scopErr) { scopErr.textContent = ''; scopErr.style.display = 'none'; }
+                        }
+                    }
+                }
+
+                // Eff_stagionale (eta_s) — prefer eta_s_min then scop
+                if (effEl && !effEl.disabled) {
+                    const etaMin = (typeof effSpec.eta_s_min !== 'undefined') ? effSpec.eta_s_min : ((typeof effSpec.scop !== 'undefined') ? effSpec.scop : (typeof ecoSpec.scop !== 'undefined' ? ecoSpec.scop : null));
+                    if (etaMin !== null && etaMin !== undefined && !isNaN(Number(etaMin))) {
+                        const raw = String(effEl.value || '').replace(',', '.').trim();
+                        const val = raw === '' ? NaN : Number(raw);
+                        if (isNaN(val) || val < Number(etaMin)) {
+                            const formatted = (typeof calculatorData !== 'undefined' && typeof calculatorData.formatNumber === 'function') ? calculatorData.formatNumber(etaMin,2) : String(etaMin);
+                            const msg = `Efficienza stagionale minima: ${formatted}`;
+                            errors.push({ row: idx + 1, msg });
+                            try { effEl.classList.add('invalid'); effEl.style.borderColor = '#d32f2f'; effEl.style.backgroundColor = '#ffebee'; effEl.setCustomValidity(msg); } catch (e) {}
+                            const effErr = effEl.parentNode.querySelector('.field-error'); if (effErr) { effErr.textContent = msg; effErr.style.display = 'block'; }
+                        } else {
+                            try { effEl.classList.remove('invalid'); effEl.style.borderColor=''; effEl.style.backgroundColor=''; effEl.setCustomValidity(''); } catch (e) {}
+                            const effErr = effEl.parentNode.querySelector('.field-error'); if (effErr) { effErr.textContent = ''; effErr.style.display = 'none'; }
+                        }
+                    }
+                }
+            } catch (e) {
+                // ignore row errors
             }
         });
 
